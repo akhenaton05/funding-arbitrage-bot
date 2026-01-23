@@ -86,7 +86,7 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <mainClass>ru.practicum.TelegramBotApplication</mainClass>
+                    <mainClass>ru.FundingApplication</mainClass>
                 </configuration>
             </plugin>
         </plugins>

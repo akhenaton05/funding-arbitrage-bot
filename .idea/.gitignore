@@ -1,0 +1,9 @@
+# Default ignored files
+/shelf/
+/workspace.xml
+
+# Application configuration with sensitive data
+application.yml
+application.yaml
+application-*.yml
+application-*.yaml

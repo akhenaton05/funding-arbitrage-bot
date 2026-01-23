@@ -100,7 +100,7 @@ public class FundingArbitrageService {
 
             ArbitrageRates topRate = arbitrageRates.getFirst();
 
-            if (topRate.getArbitrageRate() > 10) {
+            if (topRate.getArbitrageRate() > 100) {
                 log.info("High arbitrage detected: {} - {}%", topRate.getSymbol(), topRate.getArbitrageRate());
 
                 for (Long chatId : fundingContext.getSubscriberIds()) {

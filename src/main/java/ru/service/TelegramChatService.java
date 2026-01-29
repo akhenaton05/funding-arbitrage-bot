@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.ActionType;
@@ -12,6 +13,8 @@ import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.*;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import ru.config.*;
+import ru.dto.exchanges.PositionClosedEvent;
+import ru.dto.exchanges.PositionOpenedEvent;
 import ru.dto.funding.ArbitrageRates;
 import ru.event.FundingAlertEvent;
 import ru.utils.FundingArbitrageContext;
@@ -79,7 +82,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
             StringBuilder result = new StringBuilder();
             result.append("```\n");
             result.append(String.format("%-7s | %-7s | %-7s | %-8s\n",
-                    "Symbol", "Max Arb", "Extended", "Variational"));
+                    "Ticker", "Max Arb", "Extended", "Aster"));
             result.append("-".repeat(42)).append("\n");
 
             rates.stream()
@@ -94,7 +97,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
             sendMessage(chatId, result.toString());
         } catch (Exception e) {
-            sendMessage(chatId, "❌ Ошибка при получении данных");
+            sendMessage(chatId, " Error getting data");
             log.error("Error sending rates", e);
         }
     }
@@ -130,5 +133,84 @@ public class TelegramChatService extends TelegramLongPollingBot {
     public void handleFundingAlert(FundingAlertEvent event) {
         log.info("Received funding alert event for chat {}", event.getChatId());
         sendMessage(event.getChatId(), event.getMessage());
+    }
+
+    @EventListener
+    @Async
+    public void handlePositionOpened(PositionOpenedEvent event) {
+        log.info("[Telegram] Position opened event for {}", event.getTicker());
+
+        String message = formatPositionOpenedMessage(event);
+
+        for (Long chatId : fundingContext.getSubscriberIds()) {
+            sendMessage(chatId, message);
+        }
+    }
+
+    @EventListener
+    @Async
+    public void handlePositionClosed(PositionClosedEvent event) {
+        log.info("[Telegram] Position closed event for {}", event.getTicker());
+
+        String message = formatPositionClosedMessage(event);
+
+        for (Long chatId : fundingContext.getSubscriberIds()) {
+            sendMessage(chatId, message);
+        }
+    }
+
+    private String formatPositionOpenedMessage(PositionOpenedEvent event) {
+        if (event.getResult() != null &&
+                (event.getResult().contains("Error") || event.getResult().contains("Failed"))) {
+
+            return String.format(
+                    "\uD83E\uDD16 *FundingBot:* Position Opening Failed ❌\n\n" +
+                            "*Ticker:* %s\n" +
+                            "*Error:* %s\n" +
+                            "*Positions:* Extended %s | Aster %s",
+                    event.getTicker(),
+                    event.getResult(),
+                    event.getExtDirection(),
+                    event.getAstDirection()
+            );
+        }
+
+        return String.format(
+                "\uD83E\uDD16 *FundingBot:* Position Opened ✅\n\n" +
+                        "*Ticker:* %s\n" +
+                        "*Balance used:* %.2f USD\n" +
+                        "*Leverage:* 5x\n" +
+                        "*Positions:* Extended %s ~ Aster %s\n" +
+                        "*Status:* Opened, waiting for funding rates",
+                event.getTicker(),
+                event.getBalanceUsed(),
+                event.getExtDirection(),
+                event.getAstDirection()
+        );
+    }
+
+    private String formatPositionClosedMessage(PositionClosedEvent event) {
+        if (!event.isSuccess()) {
+            return String.format(
+                    "*FundingBot:* Position Close Error ❌\n\n" +
+                            "*Ticker:* %s\n" +
+                            "*Status:* Manual check required!",
+                    event.getTicker()
+            );
+        }
+
+        String emoji = event.getPnl() >= 0 ? "💰" : "📉";
+        String status = event.getPnl() >= 0 ? "Profit" : "Loss";
+
+        return String.format(
+                "\uD83E\uDD16 *FundingBot:* %s Position Closed ✅\n\n" +
+                        "*Ticker:* %s\n" +
+                        "*P&L:* %.2f USD\n" +
+                        "*Status:* %s",
+                emoji,
+                event.getTicker(),
+                event.getPnl(),
+                status
+        );
     }
 }

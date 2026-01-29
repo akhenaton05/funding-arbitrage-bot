@@ -9,8 +9,11 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import ru.dto.exchanges.Direction;
+import ru.dto.exchanges.FundingOpenSignal;
 import ru.dto.funding.ArbitrageRates;
 import ru.event.FundingAlertEvent;
+import ru.event.NewArbitrageEvent;
 import ru.utils.FundingArbitrageContext;
 
 import javax.xml.bind.ValidationException;
@@ -50,9 +53,9 @@ public class FundingArbitrageService {
         Map<String, Map<String, Object>> fundingRates = getFundingRates();
 
         Map<String, Object> extended = fundingRates.get("extended");
-        Map<String, Object> variational = fundingRates.get("variational");
+        Map<String, Object> aster = fundingRates.get("aster");
 
-        if (Objects.isNull(extended) || Objects.isNull(variational)) {
+        if (Objects.isNull(extended) || Objects.isNull(aster)) {
             log.error("Required exchanges not found");
             return Collections.emptyList();
         }
@@ -62,33 +65,32 @@ public class FundingArbitrageService {
         for (Map.Entry<String, Object> entry : extended.entrySet()) {
             String symbol = entry.getKey();
 
-            if (variational.containsKey(symbol)) {
+            if (aster.containsKey(symbol)) {
                 double extendedRate = ((Number) entry.getValue()).doubleValue();
-                double variationalRate = ((Number) variational.get(symbol)).doubleValue();
-                double arbitrage = Math.abs(extendedRate - variationalRate);
+                double asterRate = ((Number) aster.get(symbol)).doubleValue();
+                double arbitrage = Math.abs(extendedRate - asterRate);
 
-                String action = extendedRate < variationalRate ?
-                        "BUY extended, SELL variational" :
-                        "SELL extended, BUY variational";
+                String action = extendedRate < asterRate ?
+                        "BUY extended, SELL aster" :
+                        "SELL extended, BUY aster";
 
                 arbitrageRates.add(ArbitrageRates.builder()
                         .symbol(symbol)
                         .arbitrageRate(arbitrage)
                         .extendedRate(extendedRate)
-                        .variationalRate(variationalRate)
+                        .variationalRate(asterRate)
                         .action(action)
                         .build());
             }
         }
 
-        // Сортируем по убыванию арбитража
+        //Sorting
         arbitrageRates.sort(Comparator.comparingDouble(ArbitrageRates::getArbitrageRate).reversed());
 
         return arbitrageRates;
     }
 
-    // Scheduled метод - только для автоматических алертов
-    @Scheduled(cron = "0 53 * * * *") // каждый час в 53 минуты
+    @Scheduled(cron = "0 53 * * * *") // every hour at 53 minutes scanning
     private void fundingTracker() {
         try {
             List<ArbitrageRates> arbitrageRates = calculateArbitrageRates();
@@ -100,18 +102,36 @@ public class FundingArbitrageService {
 
             ArbitrageRates topRate = arbitrageRates.getFirst();
 
-            if (topRate.getArbitrageRate() > 100) {
+            if (topRate.getArbitrageRate() > 50) {
                 log.info("High arbitrage detected: {} - {}%", topRate.getSymbol(), topRate.getArbitrageRate());
 
+                //Sending Telegram Alert
                 for (Long chatId : fundingContext.getSubscriberIds()) {
                     eventPublisher.publishEvent(
                             new FundingAlertEvent(chatId, formatAlert(topRate))
                     );
+
+                    //Sending alert to ExchangeService for positions opening
+                    FundingOpenSignal signal = convertToSignal(topRate);
+                    eventPublisher.publishEvent(new NewArbitrageEvent(signal));
                 }
+
             }
+            log.info("No high arbitrage detected");
         } catch (Exception e) {
             log.error("Error in funding tracker", e);
         }
+    }
+
+    private FundingOpenSignal convertToSignal(ArbitrageRates rates) {
+        boolean sellExtended = rates.getAction().startsWith("SELL extended");
+
+        FundingOpenSignal signal = new FundingOpenSignal();
+        signal.setTicker(rates.getSymbol());
+        signal.setExtendedDirection(sellExtended ? Direction.SHORT : Direction.LONG);
+        signal.setAsterDirection(sellExtended ? Direction.LONG : Direction.SHORT);
+
+        return signal;
     }
 
     private String formatAlert(ArbitrageRates rate) {

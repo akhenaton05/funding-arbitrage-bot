@@ -2,8 +2,20 @@
 /shelf/
 /workspace.xml
 
-# Application configuration with sensitive data
+# Application properties with secrets
 application.yml
 application.yaml
+src/main/resources/application.yml
+src/main/resources/application.yaml
 application-*.yml
 application-*.yaml
+
+# IDE
+.idea/
+*.iml
+
+# Build
+target/
+
+# Logs
+*.log

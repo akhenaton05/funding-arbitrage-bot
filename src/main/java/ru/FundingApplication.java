@@ -3,6 +3,7 @@ package ru;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
@@ -13,6 +14,7 @@ import ru.service.TelegramChatService;
 @Slf4j
 @EnableScheduling
 @SpringBootApplication
+@EnableConfigurationProperties
 public class FundingApplication {
 
     public static void main(String[] args) {

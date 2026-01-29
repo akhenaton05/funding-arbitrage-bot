@@ -102,7 +102,7 @@ public class FundingArbitrageService {
 
             ArbitrageRates topRate = arbitrageRates.getFirst();
 
-            if (topRate.getArbitrageRate() > 50) {
+            if (topRate.getArbitrageRate() > 30) {
                 log.info("High arbitrage detected: {} - {}%", topRate.getSymbol(), topRate.getArbitrageRate());
 
                 //Sending Telegram Alert

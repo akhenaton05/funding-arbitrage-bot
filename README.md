@@ -1,4 +1,4 @@
-# Funding Rates Tracker Bot
+# Funding Arbitrage Bot
 
 [![Docker](https://img.shields.io/badge/Docker-Production-blue.svg)](https://www.docker.com/)
 [![Java 21](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/)

@@ -463,7 +463,7 @@ public class AsterClient implements ExchangeClient {
 
     public String closePosition(String symbol) throws InterruptedException {
         //Setting thread sleep for both Extended and Aster positions close at the same time
-        Thread.sleep(2000);
+        Thread.sleep(3000);
         try {
             //Getting positions
             List<AsterPosition> positions = getPositions(symbol);

@@ -53,7 +53,7 @@ public class ExchangesService {
     }
 
     // Every 10 sec of new hour -> checking Map - if not empty - closing position
-    @Scheduled(cron = "10 00 * * * *", zone = "UTC")
+    @Scheduled(cron = "10 03 * * * *", zone = "UTC")
     public void closeAllPositions() {
         if (openedPositions.isEmpty()) {
             log.debug("[FundingBot] Funding check: no positions to close");
@@ -228,8 +228,8 @@ public class ExchangesService {
             //Closing both positions at the same time
             CompletableFuture.allOf(extFuture, astFuture).get(30, TimeUnit.SECONDS);
 
-            //Waiting 3 sec for data to load up
-            Thread.sleep(3000);
+            //Waiting 15 sec for data to load up
+            Thread.sleep(15000);
 
             double balanceAfter = asterClient.getWalletBalanceUsdt() + extendedClient.getEquity();
             double profit = balanceAfter - balanceBefore;

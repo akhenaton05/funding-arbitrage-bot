@@ -165,52 +165,46 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
             return String.format(
                     "\uD83E\uDD16 *FundingBot:* Position Opening Failed ❌\n\n" +
+                            "*Position ID:* %s\n" +
                             "*Ticker:* %s\n" +
-                            "*Error:* %s\n" +
-                            "*Positions:* Extended %s | Aster %s",
+                            "*Error:* %s\n",
+                    event.getPositionId(),
                     event.getTicker(),
-                    event.getResult(),
-                    event.getExtDirection(),
-                    event.getAstDirection()
+                    event.getResult()
             );
         }
 
         return String.format(
                 "\uD83E\uDD16 *FundingBot:* Position Opened ✅\n\n" +
+                        "*Position ID:* %s\n" +
                         "*Ticker:* %s\n" +
-                        "*Balance used:* %.2f USD\n" +
-                        "*Leverage:* 5x\n" +
-                        "*Positions:* Extended %s ~ Aster %s\n" +
-                        "*Status:* Opened, waiting for funding rates",
+                        "*Balance used:* %.2f USD\n",
+                event.getPositionId(),
                 event.getTicker(),
-                event.getBalanceUsed(),
-                event.getExtDirection(),
-                event.getAstDirection()
+                event.getBalanceUsed()
         );
     }
 
     private String formatPositionClosedMessage(PositionClosedEvent event) {
         if (!event.isSuccess()) {
             return String.format(
-                    "*FundingBot:* Position Close Error ❌\n\n" +
+                    "\uD83E\uDD16 *FundingBot:* Position Close Error ❌\n\n" +
+                            "*Position ID:* %s\n" +
                             "*Ticker:* %s\n" +
                             "*Status:* Manual check required!",
+                    event.getPositionId(),
                     event.getTicker()
             );
         }
 
-        String emoji = event.getPnl() >= 0 ? "💰" : "📉";
-        String status = event.getPnl() >= 0 ? "Profit" : "Loss";
-
         return String.format(
-                "\uD83E\uDD16 *FundingBot:* %s Position Closed ✅\n\n" +
+                "\uD83E\uDD16 *FundingBot:* Position Closed ✅\n\n" +
+                        "*Position ID:* %s\n" +
                         "*Ticker:* %s\n" +
-                        "*P&L:* %.2f USD\n" +
-                        "*Status:* %s",
-                emoji,
+                        "*P&L:* %.2f USD\n",
+                event.getPositionId(),
                 event.getTicker(),
-                event.getPnl(),
-                status
+                event.getPnl()
         );
     }
 }

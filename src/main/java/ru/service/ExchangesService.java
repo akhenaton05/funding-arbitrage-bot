@@ -76,6 +76,7 @@ public class ExchangesService {
     public String openPosition(FundingOpenSignal signal) {
         double marginBalance = validateBalance();
         double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
+        UUID positionId = UUID.randomUUID();
 
         String extendedOrderId;
         String asterOrderId;
@@ -101,7 +102,7 @@ public class ExchangesService {
             String errorMsg = "[Extended] Error creating position: " + e.getMessage();
             log.error(errorMsg, e);
 
-            publishFailureEvent(signal, errorMsg, marginBalance);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
 
             return errorMsg;
         }
@@ -139,7 +140,7 @@ public class ExchangesService {
             String errorMsg = "[Aster] Error creating position: " + e.getMessage() +
                     "\n[FundingBot] Failed opening Aster position, loss = $" + String.format("%.4f", balanceLoss);
 
-            publishFailureEvent(signal, errorMsg, marginBalance);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
 
             return errorMsg;
         }
@@ -163,7 +164,7 @@ public class ExchangesService {
 
                 String errorMsg = "[FundingBot] Position validation failed - all positions closed with delta " + balanceLoss;
 
-                publishFailureEvent(signal, errorMsg, balanceLoss);
+                publishFailureEvent(positionId, signal, errorMsg, balanceLoss);
                 return errorMsg;
             }
         } catch (ClosingPositionException e) {
@@ -172,13 +173,13 @@ public class ExchangesService {
             String errorMsg = "[FundingBot] Failed to close positions during validation! Manual check required!\n"
                     + e.getMessage();
 
-            publishFailureEvent(signal, errorMsg, marginBalance);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
             return errorMsg;
         }
 
         //Creating opened position and putting into the map
         FundingCloseSignal positionToClose = FundingCloseSignal.builder()
-                .id(UUID.randomUUID())
+                .id(positionId)
                 .ticker(signal.getTicker())
                 .balance(marginBalance)
                 .extDirection(signal.getExtendedDirection().toString())
@@ -193,6 +194,7 @@ public class ExchangesService {
 
         //Sending Telegram notification with observer
         eventPublisher.publishEvent(new PositionOpenedEvent(
+                positionId,
                 signal.getTicker(),
                 successMsg,
                 marginBalance,
@@ -237,6 +239,7 @@ public class ExchangesService {
             double profit = balanceAfter - balanceBefore;
 
             eventPublisher.publishEvent(new PositionClosedEvent(
+                    signal.getId(),
                     signal.getTicker(),
                     profit,
                     true
@@ -248,6 +251,7 @@ public class ExchangesService {
             log.error("[FundingBot] Error closing positions for {}", signal.getTicker(), e);
 
             eventPublisher.publishEvent(new PositionClosedEvent(
+                    signal.getId(),
                     signal.getTicker(),
                     0,
                     false
@@ -362,8 +366,9 @@ public class ExchangesService {
         return extendedClient.getBalance();
     }
 
-    private void publishFailureEvent(FundingOpenSignal signal, String errorMsg, double balance) {
+    private void publishFailureEvent(UUID positionId, FundingOpenSignal signal, String errorMsg, double balance) {
         eventPublisher.publishEvent(new PositionOpenedEvent(
+                positionId,
                 signal.getTicker(),
                 errorMsg,
                 balance,

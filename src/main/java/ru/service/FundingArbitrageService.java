@@ -78,7 +78,7 @@ public class FundingArbitrageService {
                         .symbol(symbol)
                         .arbitrageRate(arbitrage)
                         .extendedRate(extendedRate)
-                        .variationalRate(asterRate)
+                        .asterRate(asterRate)
                         .action(action)
                         .build());
             }
@@ -108,7 +108,7 @@ public class FundingArbitrageService {
                 //Sending Telegram Alert
                 for (Long chatId : fundingContext.getSubscriberIds()) {
                     eventPublisher.publishEvent(
-                            new FundingAlertEvent(chatId, formatAlert(topRate))
+                            new FundingAlertEvent(chatId, topRate)
                     );
 
                     //Sending alert to ExchangeService for positions opening
@@ -132,20 +132,6 @@ public class FundingArbitrageService {
         signal.setAsterDirection(sellExtended ? Direction.LONG : Direction.SHORT);
 
         return signal;
-    }
-
-    private String formatAlert(ArbitrageRates rate) {
-        return String.format("🚨 *High Arbitrage Alert* 🚨\n\n" +
-                        "*Symbol:* %s\n" +
-                        "*Max Arb:* %.2f%%\n" +
-                        "*Extended:* %.2f%%\n" +
-                        "*Variational:* %.2f%%\n" +
-                        "*Action:* %s",
-                rate.getSymbol(),
-                rate.getArbitrageRate(),
-                rate.getExtendedRate(),
-                rate.getVariationalRate(),
-                rate.getAction());
     }
 
     private Map<String, Map<String, Object>> executeRequest(HttpGet httpGet) throws Exception {

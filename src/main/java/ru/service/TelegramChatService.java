@@ -20,6 +20,7 @@ import ru.event.FundingAlertEvent;
 import ru.utils.FundingArbitrageContext;
 
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -29,6 +30,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
     private final TelegramBotConfig telegramBotConfig;
     private final FundingArbitrageContext fundingContext;
     private final FundingArbitrageService fundingService;
+    private final ExchangesService exchangesService;
 
     @Override
     public String getBotUsername() {
@@ -69,6 +71,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
             case "/track" -> fundingContext.addSubscriberId(chatId);
             case "/untrack" -> fundingContext.removeSubscriberId(chatId);
             case "/rates" -> sendRates(chatId);
+            case "/trades" -> getTrades(chatId);
         }
     }
 
@@ -81,17 +84,17 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
             StringBuilder result = new StringBuilder();
             result.append("```\n");
-            result.append(String.format("%-7s | %-7s | %-7s | %-8s\n",
+            result.append(String.format("%-7s | %-7s | %-7s | %-7s\n",
                     "Ticker", "Max Arb", "Extended", "Aster"));
-            result.append("-".repeat(42)).append("\n");
+            result.append("-".repeat(40)).append("\n");
 
             rates.stream()
                     .limit(10)
-                    .forEach(opp -> result.append(String.format("%-7s | %6.1f%% | %7.1f%% | %9.1f%%\n",
+                    .forEach(opp -> result.append(String.format("%-7s | %6.1f%% | %7.1f%% | %8.1f%%\n",
                             opp.getSymbol(),
                             opp.getArbitrageRate(),
                             opp.getExtendedRate(),
-                            opp.getVariationalRate())));
+                            opp.getAsterRate())));
 
             result.append("```");
 
@@ -132,7 +135,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
     @EventListener
     public void handleFundingAlert(FundingAlertEvent event) {
         log.info("Received funding alert event for chat {}", event.getChatId());
-        sendMessage(event.getChatId(), event.getMessage());
+        sendMessage(event.getChatId(), formatAlert(event.getMessage()));
     }
 
     @EventListener
@@ -157,6 +160,33 @@ public class TelegramChatService extends TelegramLongPollingBot {
         for (Long chatId : fundingContext.getSubscriberIds()) {
             sendMessage(chatId, message);
         }
+    }
+
+    private void getTrades(Long chatId) {
+        log.info("[Telegram] Got trades history request");
+
+        String message = formatBalanceMap(exchangesService.getTrades());
+
+        sendMessage(chatId, message);
+    }
+
+    public String formatBalanceMap(Map<String, Double> balanceMap) {
+        if (balanceMap.isEmpty()) {
+            return "🤖 *Balance Tracker*\n\n_No positions tracked yet_";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("🤖 *FundingBot:* Position Balances\n");
+        sb.append("━━━━━━━━━━━━━━━━━━\n\n");
+
+        for (Map.Entry<String, Double> entry : balanceMap.entrySet()) {
+            String positionId = entry.getKey();
+            double balance = entry.getValue();
+
+            sb.append(String.format("🔹 *#%s* → 💰 $%.2f\n", positionId, balance));
+        }
+
+        return sb.toString();
     }
 
     private String formatPositionOpenedMessage(PositionOpenedEvent event) {
@@ -206,5 +236,19 @@ public class TelegramChatService extends TelegramLongPollingBot {
                 event.getTicker(),
                 event.getPnl()
         );
+    }
+
+    private String formatAlert(ArbitrageRates rate) {
+        return String.format("🚨 *High Arbitrage Alert* 🚨\n\n" +
+                        "*Symbol:* %s\n" +
+                        "*Max Arb:* %.2f%%\n" +
+                        "*Extended:* %.2f%%\n" +
+                        "*Aster:* %.2f%%\n" +
+                        "*Action:* %s",
+                rate.getSymbol(),
+                rate.getArbitrageRate(),
+                rate.getExtendedRate(),
+                rate.getAsterRate(),
+                rate.getAction());
     }
 }

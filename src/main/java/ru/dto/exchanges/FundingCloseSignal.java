@@ -8,7 +8,7 @@ import java.util.UUID;
 @Data
 @Builder
 public class FundingCloseSignal {
-    private UUID id;
+    private String id;
     private String ticker;
     private double balance;
     private String extDirection; //Extended asking for the current direction of the position

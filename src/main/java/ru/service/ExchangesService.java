@@ -24,10 +24,10 @@ import ru.exceptions.OpeningPositionException;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
@@ -40,7 +40,9 @@ public class ExchangesService {
     private final ApplicationEventPublisher eventPublisher;
 
     private static final int LEVERAGE = 4;
-    private final Map<UUID, FundingCloseSignal> openedPositions = new ConcurrentHashMap<>();
+    private final Map<String, FundingCloseSignal> openedPositions = new ConcurrentHashMap<>();
+    private final Map<String, Double> balanceMap = new ConcurrentHashMap<>();
+    private final AtomicLong positionIdCounter = new AtomicLong(1);
 
     @EventListener
     @Async
@@ -76,7 +78,9 @@ public class ExchangesService {
     public String openPosition(FundingOpenSignal signal) {
         double marginBalance = validateBalance();
         double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
-        UUID positionId = UUID.randomUUID();
+        String positionId = generatePositionId();
+
+        balanceMap.put(positionId, balanceBefore);
 
         String extendedOrderId;
         String asterOrderId;
@@ -134,7 +138,7 @@ public class ExchangesService {
             }
 
             //P&L calculation
-            double balanceAfter = getAsterBalance() + getExtendedBalance();
+            double balanceAfter = asterClient.getBalance() + extendedClient.getBalance();
             double balanceLoss = marginBalance - balanceAfter;
 
             String errorMsg = "[Aster] Error creating position: " + e.getMessage() +
@@ -159,7 +163,7 @@ public class ExchangesService {
                 log.error("[FundingBot] Position validation FAILED - positions were closed");
 
                 //Calculations losses/profits
-                double balanceAfter = getAsterBalance() + getExtendedBalance();
+                double balanceAfter = asterClient.getBalance() + extendedClient.getBalance();
                 double balanceLoss = balanceBefore - balanceAfter;
 
                 String errorMsg = "[FundingBot] Position validation failed - all positions closed with delta " + balanceLoss;
@@ -210,7 +214,7 @@ public class ExchangesService {
         String extSymbol = signal.getTicker() + "-USD";
         String astSymbol = signal.getTicker() + "USDT";
 
-        double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
+        double balanceBefore = balanceMap.get(signal.getId());
         log.info("[FundingBot] Balance before closing positions: {}", balanceBefore);
 
         CompletableFuture<String> extFuture = CompletableFuture.supplyAsync(() ->
@@ -262,10 +266,10 @@ public class ExchangesService {
     }
 
     private double validateBalance() {
-        double asterBalance = getAsterBalance();
+        double asterBalance = asterClient.getBalance();
         if (asterBalance == 0) throw new BalanceException("[Aster] Balance is 0");
 
-        double extendedBalance = getExtendedBalance();
+        double extendedBalance = extendedClient.getBalance();
         if (extendedBalance == 0) throw new BalanceException("[Extended] Balance is 0");
 
         //Adjusting balance for fees and price jumps
@@ -358,15 +362,12 @@ public class ExchangesService {
         return false;
     }
 
-    private double getAsterBalance() {
-        return asterClient.getBalance();
+    private String generatePositionId() {
+        long id = positionIdCounter.getAndIncrement();
+        return String.format("P-%04d", id);
     }
 
-    private double getExtendedBalance() {
-        return extendedClient.getBalance();
-    }
-
-    private void publishFailureEvent(UUID positionId, FundingOpenSignal signal, String errorMsg, double balance) {
+    private void publishFailureEvent(String positionId, FundingOpenSignal signal, String errorMsg, double balance) {
         eventPublisher.publishEvent(new PositionOpenedEvent(
                 positionId,
                 signal.getTicker(),

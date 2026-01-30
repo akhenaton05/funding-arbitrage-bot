@@ -90,7 +90,7 @@ public class FundingArbitrageService {
         return arbitrageRates;
     }
 
-    @Scheduled(cron = "0 53 * * * *") // every hour at 53 minutes scanning
+    @Scheduled(cron = "0 54 * * * *") // every hour at 54 minutes scanning
     private void fundingTracker() {
         try {
             List<ArbitrageRates> arbitrageRates = calculateArbitrageRates();
@@ -102,7 +102,7 @@ public class FundingArbitrageService {
 
             ArbitrageRates topRate = arbitrageRates.getFirst();
 
-            if (topRate.getArbitrageRate() > 30) {
+            if (topRate.getArbitrageRate() > 50) {
                 log.info("High arbitrage detected: {} - {}%", topRate.getSymbol(), topRate.getArbitrageRate());
 
                 //Sending Telegram Alert

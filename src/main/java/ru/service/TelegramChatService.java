@@ -172,27 +172,19 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     public String formatBalanceMap(Map<String, Double> balanceMap) {
         if (balanceMap.isEmpty()) {
-            return "📊 *Balance Tracker*\n\n_No positions tracked yet_";
+            return "🤖 *Balance Tracker*\n\n_No positions tracked yet_";
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("📊 *Position Balances*\n");
+        sb.append("🤖 *FundingBot:* Position Balances\n");
         sb.append("━━━━━━━━━━━━━━━━━━\n\n");
-
-        double total = 0.0;
 
         for (Map.Entry<String, Double> entry : balanceMap.entrySet()) {
             String positionId = entry.getKey();
             double balance = entry.getValue();
-            total += balance;
 
-            sb.append(String.format("🔹 *#%s*\n", positionId));
-            sb.append(String.format("   💰 $%.2f\n\n", balance));
+            sb.append(String.format("🔹 *#%s* → 💰 $%.2f\n", positionId, balance));
         }
-
-        sb.append("━━━━━━━━━━━━━━━━━━\n");
-        sb.append(String.format("💵 *Total Allocated:* $%.2f\n", total));
-        sb.append(String.format("📦 *Active Positions:* %d", balanceMap.size()));
 
         return sb.toString();
     }

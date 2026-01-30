@@ -39,7 +39,7 @@ public class ExchangesService {
     private final ExtendedClient extendedClient;
     private final ApplicationEventPublisher eventPublisher;
 
-    private static final int LEVERAGE = 5;
+    private static final int LEVERAGE = 4;
     private final Map<UUID, FundingCloseSignal> openedPositions = new ConcurrentHashMap<>();
 
     @EventListener

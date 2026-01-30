@@ -74,8 +74,8 @@ public class ExchangesService {
     }
 
     public String openPosition(FundingOpenSignal signal) {
-
-        double balanceBefore = validateBalance();
+        double marginBalance = validateBalance();
+        double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
 
         String extendedOrderId;
         String asterOrderId;
@@ -86,7 +86,7 @@ public class ExchangesService {
             extSymbol = signal.getTicker() + "-USD";
             extendedOrderId = extendedClient.openPositionWithFixedMargin(
                     extSymbol,
-                    balanceBefore,
+                    marginBalance,
                     LEVERAGE,
                     signal.getExtendedDirection().toString()
             );
@@ -101,7 +101,7 @@ public class ExchangesService {
             String errorMsg = "[Extended] Error creating position: " + e.getMessage();
             log.error(errorMsg, e);
 
-            publishFailureEvent(signal, errorMsg, balanceBefore);
+            publishFailureEvent(signal, errorMsg, marginBalance);
 
             return errorMsg;
         }
@@ -111,7 +111,7 @@ public class ExchangesService {
             astSymbol = signal.getTicker() + "USDT";
             asterOrderId = asterClient.openPositionWithFixedMargin(
                     astSymbol,
-                    balanceBefore,
+                    marginBalance,
                     LEVERAGE,
                     signal.getAsterDirection().toString()
             );
@@ -134,12 +134,12 @@ public class ExchangesService {
 
             //P&L calculation
             double balanceAfter = getAsterBalance() + getExtendedBalance();
-            double balanceLoss = balanceBefore - balanceAfter;
+            double balanceLoss = marginBalance - balanceAfter;
 
             String errorMsg = "[Aster] Error creating position: " + e.getMessage() +
                     "\n[FundingBot] Failed opening Aster position, loss = $" + String.format("%.4f", balanceLoss);
 
-            publishFailureEvent(signal, errorMsg, balanceBefore);
+            publishFailureEvent(signal, errorMsg, marginBalance);
 
             return errorMsg;
         }
@@ -172,7 +172,7 @@ public class ExchangesService {
             String errorMsg = "[FundingBot] Failed to close positions during validation! Manual check required!\n"
                     + e.getMessage();
 
-            publishFailureEvent(signal, errorMsg, balanceBefore);
+            publishFailureEvent(signal, errorMsg, marginBalance);
             return errorMsg;
         }
 
@@ -180,7 +180,7 @@ public class ExchangesService {
         FundingCloseSignal positionToClose = FundingCloseSignal.builder()
                 .id(UUID.randomUUID())
                 .ticker(signal.getTicker())
-                .balance(balanceBefore)
+                .balance(marginBalance)
                 .extDirection(signal.getExtendedDirection().toString())
                 .asterOrderId(asterOrderId)
                 .extendedOrderId(extendedOrderId)
@@ -195,7 +195,7 @@ public class ExchangesService {
         eventPublisher.publishEvent(new PositionOpenedEvent(
                 signal.getTicker(),
                 successMsg,
-                balanceBefore,
+                marginBalance,
                 signal.getExtendedDirection().toString(),
                 signal.getAsterDirection().toString()
         ));
@@ -208,7 +208,8 @@ public class ExchangesService {
         String extSymbol = signal.getTicker() + "-USD";
         String astSymbol = signal.getTicker() + "USDT";
 
-        double balanceBefore = asterClient.getWalletBalanceUsdt() + extendedClient.getEquity();
+        double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
+        log.info("[FundingBot] Balance before closing positions: {}", balanceBefore);
 
         CompletableFuture<String> extFuture = CompletableFuture.supplyAsync(() ->
                 extendedClient.closePosition(extSymbol, signal.getExtDirection())

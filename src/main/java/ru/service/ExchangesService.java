@@ -229,7 +229,7 @@ public class ExchangesService {
             CompletableFuture.allOf(extFuture, astFuture).get(30, TimeUnit.SECONDS);
 
             //Waiting 15 sec for data to load up
-            Thread.sleep(15000);
+            Thread.sleep(60000);
 
             double balanceAfter = asterClient.getWalletBalanceUsdt() + extendedClient.getEquity();
             double profit = balanceAfter - balanceBefore;

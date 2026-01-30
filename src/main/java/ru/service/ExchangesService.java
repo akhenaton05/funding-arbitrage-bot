@@ -377,4 +377,8 @@ public class ExchangesService {
                 signal.getAsterDirection().toString()
         ));
     }
+
+    public Map<String, Double> getTrades() {
+        return balanceMap;
+    }
 }

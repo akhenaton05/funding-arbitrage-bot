@@ -11,6 +11,6 @@ public class ArbitrageRates {
     private String symbol;
     private double arbitrageRate;
     private double extendedRate;
-    private double variationalRate;
+    private double asterRate;
     private String action;
 }

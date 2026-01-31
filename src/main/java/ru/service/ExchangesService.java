@@ -1,7 +1,6 @@
 package ru.service;
 
 import lombok.AllArgsConstructor;
-import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
@@ -21,7 +20,6 @@ import ru.event.NewArbitrageEvent;
 import ru.exceptions.BalanceException;
 import ru.exceptions.ClosingPositionException;
 import ru.exceptions.OpeningPositionException;
-import ru.utils.GlobalModeResolver;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;

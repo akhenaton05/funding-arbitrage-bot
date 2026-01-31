@@ -591,25 +591,37 @@ public class AsterClient implements ExchangeClient {
         throw new RuntimeException("[Aster] API error: " + code + " → " + body);
     }
 
-    public Double getWalletBalanceUsdt() {
+    public int getMaxLeverage(String symbol) {
         try {
-            String json = executeSignedRequest("GET", "/fapi/v2/balance", "recvWindow=5000");
-            if (json == null) return 0.0;
+            log.info("[Aster] Getting max leverage for {}", symbol);
 
-            JsonNode root = objectMapper.readTree(json);
-            if (!root.isArray() || root.isEmpty()) return 0.0;
+            String queryParams = "symbol=" + symbol;
+            String response = executeSignedRequest("GET", "/fapi/v1/leverageBracket", queryParams);
 
-            for (JsonNode node : root) {
-                if ("USDT".equals(node.path("asset").asText())) {
-                    double wallet = node.path("balance").asDouble(0.0); // wallet balance [web:67]
-                    log.info("[Aster] Wallet balance USDT: {}", wallet);
-                    return wallet;
-                }
+            if (response == null || response.isEmpty()) {
+                log.warn("[Aster] Empty response for leverage info, using default mode parameter or 10");
+                return 10;
             }
-            return 0.0;
+
+            log.debug("[Aster] Leverage response: {}", response);
+
+            Map<String, Object> data = objectMapper.readValue(response, Map.class);
+            List<Map<String, Object>> brackets = (List<Map<String, Object>>) data.get("brackets");
+
+            if (brackets != null && !brackets.isEmpty()) {
+                Map<String, Object> firstBracket = brackets.get(0);
+                Integer maxLeverage = (Integer) firstBracket.get("initialLeverage");
+
+                log.info("[Aster] Max leverage for {}: {}x", symbol, maxLeverage);
+                return maxLeverage;
+            }
+
+            log.warn("[Aster] No brackets found for {}, using using default mode parameter or 10", symbol);
+            return 10;
+
         } catch (Exception e) {
-            log.error("[Aster] Error getting wallet balance", e);
-            return 0.0;
+            log.error("[Aster] Failed to get max leverage for {}, using default mode parameter or 10", symbol, e);
+            return 10;
         }
     }
 }

@@ -252,7 +252,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*Position ID:* %s\n" +
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
-                        "*Balance used:* %.2f USD\n",
+                        "*Margin used:* %.2f USD\n",
                 event.getPositionId(),
                 event.getMode(),
                 event.getTicker(),

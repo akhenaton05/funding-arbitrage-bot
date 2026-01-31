@@ -96,7 +96,7 @@ public class ExchangesService {
             return;
         }
 
-        log.debug("[FundingBot] Smart mode - checking {} positions", openedPositions.size());
+        log.info("[FundingBot] Smart mode - checking {} positions", openedPositions.size());
 
         List<String> toClose = new ArrayList<>();
 
@@ -139,16 +139,28 @@ public class ExchangesService {
                 openedPositions.remove(id);
                 balanceMap.remove(id);
             }
+        } else {
+            log.info("[FundingBot] SmartMode - no position to close, position hold continued");
         }
     }
 
     public String openPosition(FundingOpenSignal signal) {
+        String positionId = generatePositionId();
         double marginBalance = validateBalance();
         double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
-        String positionId = generatePositionId();
+        if (marginBalance <= 5) {
+            String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
+            log.info("[FundingBot] No balance available to open position: {}", marginBalance);
+
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
+            return errorMsg;
+        }
+
         HoldingMode mode = signal.getMode();
         PositionBalance positionBalance = new PositionBalance();
         positionBalance.setBalanceBefore(balanceBefore);
+
+        int leverage = Math.min(signal.getLeverage(), validateLeverage(signal.getTicker()));
 
         balanceMap.put(positionId, positionBalance);
 
@@ -162,7 +174,7 @@ public class ExchangesService {
             extendedOrderId = extendedClient.openPositionWithFixedMargin(
                     extSymbol,
                     marginBalance,
-                    signal.getLeverage(),
+                    leverage,
                     signal.getExtendedDirection().toString()
             );
 
@@ -187,7 +199,7 @@ public class ExchangesService {
             asterOrderId = asterClient.openPositionWithFixedMargin(
                     astSymbol,
                     marginBalance,
-                    signal.getLeverage(),
+                    leverage,
                     signal.getAsterDirection().toString()
             );
 
@@ -530,5 +542,14 @@ public class ExchangesService {
     private long getHeldMinutes(FundingCloseSignal pos) {
         long heldMs = System.currentTimeMillis() - pos.getOpenedAtMs();
         return TimeUnit.MILLISECONDS.toMinutes(heldMs);
+    }
+
+    public int validateLeverage(String symbol) {
+        int asterLeverage = asterClient.getMaxLeverage(symbol);
+
+        log.info("[FundingBot] Aster leverage for {}: {}",
+                symbol, asterLeverage);
+
+        return asterLeverage;
     }
 }

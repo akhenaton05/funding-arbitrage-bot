@@ -136,6 +136,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
     }
 
     @EventListener
+    @Async
     public void handleFundingAlert(FundingAlertEvent event) {
         log.info("Received funding alert event for chat {}", event.getChatId());
         sendMessage(event.getChatId(), formatAlert(event.getMessage()));
@@ -229,26 +230,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
         return sb.toString();
     }
 
-
-//    public String formatBalanceMap(Map<String, Double> balanceMap) {
-//        if (balanceMap.isEmpty()) {
-//            return "🤖 *FundingBot:* Balance Tracker\n\n_No positions tracked yet_";
-//        }
-//
-//        StringBuilder sb = new StringBuilder();
-//        sb.append("🤖 *FundingBot:* Position Balances\n");
-//        sb.append("━━━━━━━━━━━━━━━━━━\n\n");
-//
-//        for (Map.Entry<String, Double> entry : balanceMap.entrySet()) {
-//            String positionId = entry.getKey();
-//            double balance = entry.getValue();
-//
-//            sb.append(String.format("🔹 *#%s* → 💰 $%.2f\n", positionId, balance));
-//        }
-//
-//        return sb.toString();
-//    }
-
     private String formatPositionOpenedMessage(PositionOpenedEvent event) {
         if (event.getResult() != null &&
                 (event.getResult().contains("Error") || event.getResult().contains("Failed"))) {
@@ -256,9 +237,11 @@ public class TelegramChatService extends TelegramLongPollingBot {
             return String.format(
                     "🤖 *FundingBot:* Position Opening Failed ❌\n\n" +
                             "*Position ID:* %s\n" +
+                            "*Mode:* %s\n" +
                             "*Ticker:* %s\n" +
                             "*Error:* %s\n",
                     event.getPositionId(),
+                    event.getMode(),
                     event.getTicker(),
                     event.getResult()
             );
@@ -267,9 +250,11 @@ public class TelegramChatService extends TelegramLongPollingBot {
         return String.format(
                 "🤖 *FundingBot:* Position Opened ✅\n\n" +
                         "*Position ID:* %s\n" +
+                        "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
                         "*Balance used:* %.2f USD\n",
                 event.getPositionId(),
+                event.getMode(),
                 event.getTicker(),
                 event.getBalanceUsed()
         );
@@ -280,9 +265,11 @@ public class TelegramChatService extends TelegramLongPollingBot {
             return String.format(
                     "🤖 *FundingBot:* Position Close Error ❌\n\n" +
                             "*Position ID:* %s\n" +
+                            "*Mode:* %s\n" +
                             "*Ticker:* %s\n" +
                             "*Status:* Manual check required!",
                     event.getPositionId(),
+                    event.getMode(),
                     event.getTicker()
             );
         }
@@ -290,9 +277,11 @@ public class TelegramChatService extends TelegramLongPollingBot {
         return String.format(
                 "🤖 *FundingBot:* Position Closed ✅\n\n" +
                         "*Position ID:* %s\n" +
+                        "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
                         "*P&L:* %.2f USD\n",
                 event.getPositionId(),
+                event.getMode(),
                 event.getTicker(),
                 event.getPnl()
         );

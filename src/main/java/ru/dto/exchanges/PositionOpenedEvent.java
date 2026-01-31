@@ -14,4 +14,5 @@ public class PositionOpenedEvent {
     private final double balanceUsed;
     private final String extDirection;
     private final String astDirection;
+    private final String mode;
 }

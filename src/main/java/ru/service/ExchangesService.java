@@ -279,7 +279,8 @@ public class ExchangesService {
                 successMsg,
                 marginBalance,
                 signal.getExtendedDirection().toString(),
-                signal.getAsterDirection().toString()
+                signal.getAsterDirection().toString(),
+                mode.equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode"
         ));
 
         log.info(successMsg);
@@ -334,7 +335,8 @@ public class ExchangesService {
                     signal.getTicker(),
                     profit,
                     profitPercent,
-                    true
+                    true,
+                    signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode"
             ));
 
             return String.format("[FundingBot] Positions closed. P&L: %.4f USD (%.2f%%)", profit, profitPercent);
@@ -347,7 +349,8 @@ public class ExchangesService {
                     signal.getTicker(),
                     0,
                     0,
-                    false
+                    false,
+                    signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode"
             ));
 
             return String.format("[FundingBot] %s Partial close - Manual check Needed!\n", signal.getTicker());
@@ -463,7 +466,8 @@ public class ExchangesService {
                 errorMsg,
                 balance,
                 signal.getExtendedDirection().toString(),
-                signal.getAsterDirection().toString()
+                signal.getAsterDirection().toString(),
+                signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode"
         ));
     }
 

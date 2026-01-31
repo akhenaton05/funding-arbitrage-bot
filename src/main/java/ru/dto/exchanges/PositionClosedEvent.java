@@ -13,4 +13,5 @@ public class PositionClosedEvent {
     private final double pnl;
     private final double percent;
     private final boolean success;
+    private final String mode;
 }

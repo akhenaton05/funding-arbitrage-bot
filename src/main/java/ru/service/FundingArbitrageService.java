@@ -141,7 +141,7 @@ public class FundingArbitrageService {
                         topRate.getSymbol(), leverage);
             }
 
-            //Sending signal with chosen mode
+            //Sending event to listeners
             for (Long chatId : fundingContext.getSubscriberIds()) {
                 eventPublisher.publishEvent(new FundingAlertEvent(chatId, topRate, selectedMode, leverage));
 

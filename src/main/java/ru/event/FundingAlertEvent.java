@@ -1,15 +1,15 @@
 package ru.event;
 
+import lombok.AllArgsConstructor;
 import lombok.Getter;
 import ru.dto.funding.ArbitrageRates;
+import ru.dto.funding.HoldingMode;
 
 @Getter
+@AllArgsConstructor
 public class FundingAlertEvent {
-    private final ArbitrageRates message;
     private final Long chatId;
-    
-    public FundingAlertEvent(Long chatId, ArbitrageRates message) {
-        this.chatId = chatId;
-        this.message = message;
-    }
+    private final ArbitrageRates message;
+    private HoldingMode mode;
+    private int leverage;
 }

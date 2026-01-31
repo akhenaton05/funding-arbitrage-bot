@@ -13,9 +13,12 @@ import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.*;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import ru.config.*;
+import ru.dto.exchanges.FundingCloseSignal;
+import ru.dto.exchanges.PositionBalance;
 import ru.dto.exchanges.PositionClosedEvent;
 import ru.dto.exchanges.PositionOpenedEvent;
 import ru.dto.funding.ArbitrageRates;
+import ru.dto.funding.HoldingMode;
 import ru.event.FundingAlertEvent;
 import ru.utils.FundingArbitrageContext;
 
@@ -165,36 +168,93 @@ public class TelegramChatService extends TelegramLongPollingBot {
     private void getTrades(Long chatId) {
         log.info("[Telegram] Got trades history request");
 
-        String message = formatBalanceMap(exchangesService.getTrades());
+        String message = formatBalanceMap(
+                exchangesService.getTrades(),
+                exchangesService.getOpenedPositions()
+        );
 
         sendMessage(chatId, message);
     }
 
-    public String formatBalanceMap(Map<String, Double> balanceMap) {
+    public String formatBalanceMap(Map<String, PositionBalance> balanceMap,
+                                   Map<String, FundingCloseSignal> openedPositions) {
         if (balanceMap.isEmpty()) {
-            return "🤖 *Balance Tracker*\n\n_No positions tracked yet_";
+            return "🤖 *FundingBot:* Balance Tracker\n\n_No positions tracked yet_";
         }
 
         StringBuilder sb = new StringBuilder();
         sb.append("🤖 *FundingBot:* Position Balances\n");
         sb.append("━━━━━━━━━━━━━━━━━━\n\n");
 
-        for (Map.Entry<String, Double> entry : balanceMap.entrySet()) {
-            String positionId = entry.getKey();
-            double balance = entry.getValue();
+        balanceMap.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> {
+                    String positionId = entry.getKey();
+                    PositionBalance balance = entry.getValue();
 
-            sb.append(String.format("🔹 *#%s* → 💰 $%.2f\n", positionId, balance));
-        }
+                    String emoji;
+
+                    if (balance.isClosed()) {
+                        // if closed - showing profit/loss
+                        emoji = balance.getProfit() > 0 ? "✅" : "❌";
+                        String profitSign = balance.getProfit() > 0 ? "+" : "";
+
+                        sb.append(String.format(
+                                "%s *#%s*\n" +
+                                        "   Before: $%.2f → After: $%.2f\n" +
+                                        "   P&L: %s$%.2f\n\n",
+                                emoji,
+                                positionId,
+                                balance.getBalanceBefore(),
+                                balance.getBalanceAfter(),
+                                profitSign,
+                                balance.getProfit()
+                        ));
+                    } else {
+                        FundingCloseSignal position = openedPositions.get(positionId);
+                        emoji = (position != null && position.getMode() == HoldingMode.FAST_MODE)
+                                ? "⚡"
+                                : "🧠";
+
+                        sb.append(String.format(
+                                "%s *#%s*\n" +
+                                        "   Before: $%.2f → After: _pending_\n\n",
+                                emoji,
+                                positionId,
+                                balance.getBalanceBefore()
+                        ));
+                    }
+                });
 
         return sb.toString();
     }
+
+
+//    public String formatBalanceMap(Map<String, Double> balanceMap) {
+//        if (balanceMap.isEmpty()) {
+//            return "🤖 *FundingBot:* Balance Tracker\n\n_No positions tracked yet_";
+//        }
+//
+//        StringBuilder sb = new StringBuilder();
+//        sb.append("🤖 *FundingBot:* Position Balances\n");
+//        sb.append("━━━━━━━━━━━━━━━━━━\n\n");
+//
+//        for (Map.Entry<String, Double> entry : balanceMap.entrySet()) {
+//            String positionId = entry.getKey();
+//            double balance = entry.getValue();
+//
+//            sb.append(String.format("🔹 *#%s* → 💰 $%.2f\n", positionId, balance));
+//        }
+//
+//        return sb.toString();
+//    }
 
     private String formatPositionOpenedMessage(PositionOpenedEvent event) {
         if (event.getResult() != null &&
                 (event.getResult().contains("Error") || event.getResult().contains("Failed"))) {
 
             return String.format(
-                    "\uD83E\uDD16 *FundingBot:* Position Opening Failed ❌\n\n" +
+                    "🤖 *FundingBot:* Position Opening Failed ❌\n\n" +
                             "*Position ID:* %s\n" +
                             "*Ticker:* %s\n" +
                             "*Error:* %s\n",
@@ -205,7 +265,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
 
         return String.format(
-                "\uD83E\uDD16 *FundingBot:* Position Opened ✅\n\n" +
+                "🤖 *FundingBot:* Position Opened ✅\n\n" +
                         "*Position ID:* %s\n" +
                         "*Ticker:* %s\n" +
                         "*Balance used:* %.2f USD\n",
@@ -218,7 +278,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
     private String formatPositionClosedMessage(PositionClosedEvent event) {
         if (!event.isSuccess()) {
             return String.format(
-                    "\uD83E\uDD16 *FundingBot:* Position Close Error ❌\n\n" +
+                    "🤖 *FundingBot:* Position Close Error ❌\n\n" +
                             "*Position ID:* %s\n" +
                             "*Ticker:* %s\n" +
                             "*Status:* Manual check required!",
@@ -228,7 +288,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
 
         return String.format(
-                "\uD83E\uDD16 *FundingBot:* Position Closed ✅\n\n" +
+                "🤖 *FundingBot:* Position Closed ✅\n\n" +
                         "*Position ID:* %s\n" +
                         "*Ticker:* %s\n" +
                         "*P&L:* %.2f USD\n",

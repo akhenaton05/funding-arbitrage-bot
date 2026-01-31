@@ -1,6 +1,7 @@
 package ru.service;
 
 import lombok.AllArgsConstructor;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
@@ -10,20 +11,19 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import ru.client.aster.AsterClient;
 import ru.client.extended.ExtendedClient;
-import ru.dto.exchanges.FundingCloseSignal;
-import ru.dto.exchanges.FundingOpenSignal;
-import ru.dto.exchanges.PositionClosedEvent;
-import ru.dto.exchanges.PositionOpenedEvent;
+import ru.config.FundingConfig;
+import ru.dto.exchanges.*;
 import ru.dto.exchanges.aster.AsterPosition;
 import ru.dto.exchanges.extended.ExtendedPosition;
+import ru.dto.funding.ArbitrageRates;
+import ru.dto.funding.HoldingMode;
 import ru.event.NewArbitrageEvent;
 import ru.exceptions.BalanceException;
 import ru.exceptions.ClosingPositionException;
 import ru.exceptions.OpeningPositionException;
+import ru.utils.GlobalModeResolver;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -38,10 +38,11 @@ public class ExchangesService {
     private final AsterClient asterClient;
     private final ExtendedClient extendedClient;
     private final ApplicationEventPublisher eventPublisher;
+    private final FundingArbitrageService fundingArbitrageService;
+    private final FundingConfig fundingConfig;
 
-    private static final int LEVERAGE = 4;
     private final Map<String, FundingCloseSignal> openedPositions = new ConcurrentHashMap<>();
-    private final Map<String, Double> balanceMap = new ConcurrentHashMap<>();
+    private final Map<String, PositionBalance> balanceMap = new ConcurrentHashMap<>();
     private final AtomicLong positionIdCounter = new AtomicLong(1);
 
     @EventListener
@@ -54,33 +55,104 @@ public class ExchangesService {
         log.info("[FundingBot] Result: {}", result);
     }
 
-    // Every 10 sec of new hour -> checking Map - if not empty - closing position
     @Scheduled(cron = "10 01 * * * *", zone = "UTC")
-    public void closeAllPositions() {
+    public void closeOnFundingTime() {
         if (openedPositions.isEmpty()) {
             log.debug("[FundingBot] Funding check: no positions to close");
             return;
         }
 
-        log.info("[FundingBot] Funding received! Closing {} positions...", openedPositions.size());
+        log.info("[FundingBot] Funding time! Checking Fast mode positions");
 
-        StringBuilder finalList = new StringBuilder();
+        List<String> toClose = new ArrayList<>();
 
-        for (FundingCloseSignal signalToClose : openedPositions.values()) {
-            finalList.append(closePositions(signalToClose));
+        //Filtering only fast mode positions
+        for (FundingCloseSignal signal : openedPositions.values()) {
+            if (signal.getMode() == HoldingMode.FAST_MODE) {
+                toClose.add(signal.getId());
+            }
         }
 
-        openedPositions.clear();
-        log.info("[FundingBot] All positions closed, queue cleared \n");
-        log.info("[FundingBot] Positions:\n{}", finalList);
+        if (toClose.isEmpty()) {
+            log.debug("[FundingBot] No Fast mode positions found");
+            return;
+        }
+
+        log.info("[FundingBot] Closing {} Fast mode positions", toClose.size());
+
+        StringBuilder finalList = new StringBuilder();
+        for (String id : toClose) {
+            FundingCloseSignal signal = openedPositions.get(id);
+            finalList.append(closePositions(signal));
+            openedPositions.remove(id);
+            balanceMap.remove(id);
+        }
+
+        log.info("[FundingBot] Positions closed:\n{}", finalList);
+    }
+
+    //Smart Mode funding tracking
+    @Scheduled(fixedDelayString = "${funding.smart.checkDelayMs}")
+    public void smartHoldTick() {
+        if (openedPositions.isEmpty()) {
+            return;
+        }
+
+        log.debug("[FundingBot] Smart mode - checking {} positions", openedPositions.size());
+
+        List<String> toClose = new ArrayList<>();
+
+        for (FundingCloseSignal pos : openedPositions.values()) {
+            if (pos.getMode() != HoldingMode.SMART_MODE) {
+                continue;
+            }
+
+            ArbitrageRates currentRate = getCurrentSpread(pos.getTicker());
+
+            if (Objects.isNull(currentRate)) {
+                log.warn("[FundingBot] Current rate is null for {}, skipping", pos.getTicker());
+                continue;
+            }
+
+            double currentSpread = currentRate.getArbitrageRate();
+
+            //Checking directions flip
+            if (!pos.getAction().equalsIgnoreCase(currentRate.getAction())) {
+                log.info("[FundingBot] Funding rate flipped! Closing {}: spread={}, held={}min",
+                        pos.getTicker(), currentSpread, getHeldMinutes(pos));
+                toClose.add(pos.getId());
+                continue;
+            }
+
+            if (shouldCloseSmart(pos, currentSpread)) {
+                log.info("[FundingBot] Closing {}: spread={}, held={}min",
+                        pos.getTicker(), currentSpread, getHeldMinutes(pos));
+                toClose.add(pos.getId());
+            }
+        }
+
+        //Closing selected positions
+        if (!toClose.isEmpty()) {
+            log.info("[FundingBot] Closing {} positions in SmartMode", toClose.size());
+
+            for (String id : toClose) {
+                FundingCloseSignal signal = openedPositions.get(id);
+                closePositions(signal);
+                openedPositions.remove(id);
+                balanceMap.remove(id);
+            }
+        }
     }
 
     public String openPosition(FundingOpenSignal signal) {
         double marginBalance = validateBalance();
         double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
         String positionId = generatePositionId();
+        HoldingMode mode = signal.getMode();
+        PositionBalance positionBalance = new PositionBalance();
+        positionBalance.setBalanceBefore(balanceBefore);
 
-        balanceMap.put(positionId, balanceBefore);
+        balanceMap.put(positionId, positionBalance);
 
         String extendedOrderId;
         String asterOrderId;
@@ -92,7 +164,7 @@ public class ExchangesService {
             extendedOrderId = extendedClient.openPositionWithFixedMargin(
                     extSymbol,
                     marginBalance,
-                    LEVERAGE,
+                    signal.getLeverage(),
                     signal.getExtendedDirection().toString()
             );
 
@@ -117,7 +189,7 @@ public class ExchangesService {
             asterOrderId = asterClient.openPositionWithFixedMargin(
                     astSymbol,
                     marginBalance,
-                    LEVERAGE,
+                    signal.getLeverage(),
                     signal.getAsterDirection().toString()
             );
 
@@ -181,20 +253,26 @@ public class ExchangesService {
             return errorMsg;
         }
 
-        //Creating opened position and putting into the map
+        //Creating opened position and putting into the open positions map
         FundingCloseSignal positionToClose = FundingCloseSignal.builder()
                 .id(positionId)
                 .ticker(signal.getTicker())
                 .balance(marginBalance)
-                .extDirection(signal.getExtendedDirection().toString())
+                .extDirection(signal.getExtendedDirection())
+                .astDirection(signal.getAsterDirection())
                 .asterOrderId(asterOrderId)
                 .extendedOrderId(extendedOrderId)
+                .action(signal.getAction())
+                .mode(mode)
+                .openedAtMs(System.currentTimeMillis())
+                .openSpread(0.0)
+                .badStreak(0)
                 .build();
 
         openedPositions.put(positionToClose.getId(), positionToClose);
 
         String successMsg = "[FundingBot] Successfully opened positions | Extended: " + extendedOrderId +
-                " | Aster: " + asterOrderId + " | Waiting for funding rates";
+                " | Aster: " + asterOrderId + " | Mode: " + mode + ". Waiting for funding fees.";
 
         //Sending Telegram notification with observer
         eventPublisher.publishEvent(new PositionOpenedEvent(
@@ -214,11 +292,13 @@ public class ExchangesService {
         String extSymbol = signal.getTicker() + "-USD";
         String astSymbol = signal.getTicker() + "USDT";
 
-        double balanceBefore = balanceMap.get(signal.getId());
+        PositionBalance posBalance = balanceMap.get(signal.getId());
+
+        double balanceBefore = posBalance.getBalanceBefore();
         log.info("[FundingBot] Balance before closing positions: {}", balanceBefore);
 
         CompletableFuture<String> extFuture = CompletableFuture.supplyAsync(() ->
-                extendedClient.closePosition(extSymbol, signal.getExtDirection())
+                extendedClient.closePosition(extSymbol, signal.getExtDirection().toString())
         );
 
         CompletableFuture<String> astFuture = CompletableFuture.supplyAsync(() ->
@@ -235,21 +315,31 @@ public class ExchangesService {
             //Closing both positions at the same time
             CompletableFuture.allOf(extFuture, astFuture).get(30, TimeUnit.SECONDS);
 
-            //Waiting 15 sec for data to load up
-            Thread.sleep(15000);
+            //Waiting 20 sec for data to load up
+            Thread.sleep(20000);
 
             double balanceAfter = asterClient.getBalance() + extendedClient.getBalance();
             log.info("[FundingBot] Balance after closing positions: {}", balanceAfter);
             double profit = balanceAfter - balanceBefore;
+            posBalance.setBalanceAfter(balanceAfter);
+
+            //Percent calculation
+            double usedMargin = signal.getBalance();
+            double profitPercent = (profit / usedMargin) * 100;
+
+            log.info("[FundingBot] P&L: ${} ({}%)",
+                    String.format("%.4f", profit),
+                    String.format("%.2f", profitPercent));
 
             eventPublisher.publishEvent(new PositionClosedEvent(
                     signal.getId(),
                     signal.getTicker(),
                     profit,
+                    profitPercent,
                     true
             ));
 
-            return String.format("[FundingBot] Positions closed. P&L: %.4f USD", profit);
+            return String.format("[FundingBot] Positions closed. P&L: %.4f USD (%.2f%%)", profit, profitPercent);
 
         } catch (Exception e) {
             log.error("[FundingBot] Error closing positions for {}", signal.getTicker(), e);
@@ -257,6 +347,7 @@ public class ExchangesService {
             eventPublisher.publishEvent(new PositionClosedEvent(
                     signal.getId(),
                     signal.getTicker(),
+                    0,
                     0,
                     false
             ));
@@ -378,7 +469,64 @@ public class ExchangesService {
         ));
     }
 
-    public Map<String, Double> getTrades() {
-        return balanceMap;
+    public Map<String, FundingCloseSignal> getOpenedPositions() {
+        return Collections.unmodifiableMap(openedPositions);
+    }
+
+    public Map<String, PositionBalance> getTrades() {
+        return Collections.unmodifiableMap(balanceMap);
+    }
+
+    private ArbitrageRates getCurrentSpread(String ticker) {
+        try {
+            List<ArbitrageRates> rates = fundingArbitrageService.calculateArbitrageRates();
+            for (ArbitrageRates rate : rates) {
+                if (rate.getSymbol().equals(ticker)) {
+                    return rate;
+                }
+            }
+            log.warn("[FundingBot] Ticker {} not found in current rates", ticker);
+            return null;
+        } catch (Exception e) {
+            log.error("[FundingBot] Failed to get spread for {}", ticker, e);
+            return null;
+        }
+    }
+
+    private boolean shouldCloseSmart(FundingCloseSignal pos, double currentSpread) {
+        int maxHoldMinutes = fundingConfig.getSmart().getMaxHoldMinutes();
+
+        long heldMinutes = getHeldMinutes(pos);
+        if (heldMinutes >= maxHoldMinutes) {
+            log.info("[FundingBot] Max hold time reached: {}min (max {})",
+                    heldMinutes, maxHoldMinutes);
+            return true;
+        }
+
+        //Min rate allowed
+        double threshold = fundingConfig.getSmart().getCloseThreshold();
+
+        if (currentSpread <= threshold) {
+            pos.setBadStreak(pos.getBadStreak() + 1);
+            log.debug("[FundingBot] Bad spread: {} <= {}, streak={}",
+                    currentSpread, threshold, pos.getBadStreak());
+        } else {
+            pos.setBadStreak(0);
+        }
+
+        int badStreakThreshold = fundingConfig.getSmart().getBadStreakThreshold();
+
+        if (pos.getBadStreak() >= badStreakThreshold) {
+            log.info("[SmartHold] Bad streak {} >= {}",
+                    pos.getBadStreak(), badStreakThreshold);
+            return true;
+        }
+
+        return false;
+    }
+
+    private long getHeldMinutes(FundingCloseSignal pos) {
+        long heldMs = System.currentTimeMillis() - pos.getOpenedAtMs();
+        return TimeUnit.MILLISECONDS.toMinutes(heldMs);
     }
 }

@@ -145,7 +145,6 @@ public class ExchangesService {
     public String openPosition(FundingOpenSignal signal) {
         String positionId = generatePositionId();
         double marginBalance = validateBalance();
-        double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
         if (marginBalance <= 5) {
             String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
@@ -154,7 +153,9 @@ public class ExchangesService {
             return errorMsg;
         }
 
+        double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
         HoldingMode mode = signal.getMode();
+
         PositionBalance positionBalance = new PositionBalance();
         positionBalance.setBalanceBefore(balanceBefore);
 

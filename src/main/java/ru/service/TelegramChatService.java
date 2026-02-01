@@ -265,6 +265,15 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     private String formatPositionOpenedMessage(PositionOpenedEvent event) {
         if (!event.isSuccess()) {
+            if (event.getResult() != null &&
+                    event.getResult().contains("No balance available to open position")) {
+                return String.format(
+                        "🤖 *FundingBot:* No margin available to open position\n\n" +
+                                "*Ticker:* %s",
+                        event.getTicker()
+                );
+            }
+
             return String.format(
                     "🤖 *FundingBot:* Position Opening Failed ❌\n\n" +
                             "*Position ID:* %s\n" +

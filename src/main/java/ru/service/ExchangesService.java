@@ -83,7 +83,6 @@ public class ExchangesService {
             FundingCloseSignal signal = openedPositions.get(id);
             finalList.append(closePositions(signal));
             openedPositions.remove(id);
-            balanceMap.remove(id);
         }
 
         log.info("[FundingBot] Positions closed:\n{}", finalList);
@@ -137,7 +136,6 @@ public class ExchangesService {
                 FundingCloseSignal signal = openedPositions.get(id);
                 closePositions(signal);
                 openedPositions.remove(id);
-                balanceMap.remove(id);
             }
         } else {
             log.info("[FundingBot] SmartMode - no position to close, position hold continued");
@@ -152,7 +150,7 @@ public class ExchangesService {
             String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
 
-            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
             return errorMsg;
         }
 
@@ -188,7 +186,7 @@ public class ExchangesService {
             String errorMsg = "[Extended] Error creating position: " + e.getMessage();
             log.error(errorMsg, e);
 
-            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
 
             return errorMsg;
         }
@@ -226,7 +224,7 @@ public class ExchangesService {
             String errorMsg = "[Aster] Error creating position: " + e.getMessage() +
                     "\n[FundingBot] Failed opening Aster position, loss = $" + String.format("%.4f", balanceLoss);
 
-            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
 
             return errorMsg;
         }
@@ -250,7 +248,7 @@ public class ExchangesService {
 
                 String errorMsg = "[FundingBot] Position validation failed - all positions closed with delta " + balanceLoss;
 
-                publishFailureEvent(positionId, signal, errorMsg, balanceLoss);
+                publishFailureEvent(positionId, signal, errorMsg, balanceLoss, false);
                 return errorMsg;
             }
         } catch (ClosingPositionException e) {
@@ -259,7 +257,7 @@ public class ExchangesService {
             String errorMsg = "[FundingBot] Failed to close positions during validation! Manual check required!\n"
                     + e.getMessage();
 
-            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
             return errorMsg;
         }
 
@@ -292,7 +290,8 @@ public class ExchangesService {
                 marginBalance,
                 signal.getExtendedDirection().toString(),
                 signal.getAsterDirection().toString(),
-                mode.equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode"
+                mode.equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
+                true
         ));
 
         log.info(successMsg);
@@ -471,7 +470,7 @@ public class ExchangesService {
         return String.format("P-%04d", id);
     }
 
-    private void publishFailureEvent(String positionId, FundingOpenSignal signal, String errorMsg, double balance) {
+    private void publishFailureEvent(String positionId, FundingOpenSignal signal, String errorMsg, double balance, boolean success) {
         eventPublisher.publishEvent(new PositionOpenedEvent(
                 positionId,
                 signal.getTicker(),
@@ -479,7 +478,8 @@ public class ExchangesService {
                 balance,
                 signal.getExtendedDirection().toString(),
                 signal.getAsterDirection().toString(),
-                signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode"
+                signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
+                success
         ));
     }
 
@@ -551,5 +551,44 @@ public class ExchangesService {
                 symbol, asterLeverage);
 
         return asterLeverage;
+    }
+
+    public void closeAllPositions() {
+        if (openedPositions.isEmpty()) {
+            log.debug("[FundingBot] Funding check: no positions to close");
+            return;
+        }
+
+        log.info("[FundingBot] Funding received! Closing {} positions...", openedPositions.size());
+
+        StringBuilder finalList = new StringBuilder();
+
+        for (FundingCloseSignal signalToClose : openedPositions.values()) {
+            finalList.append(closePositions(signalToClose));
+        }
+
+        openedPositions.clear();
+        log.info("[FundingBot] All positions closed, queue cleared \n");
+        log.info("[FundingBot] Positions:\n{}", finalList);
+    }
+
+    public String closePositionById(String positionId) {
+        FundingCloseSignal signal = openedPositions.get(positionId);
+
+        if (signal == null) {
+            log.warn("[FundingBot] Position {} not found", positionId);
+            return String.format("Position %s not found.", positionId);
+        }
+
+        log.info("[FundingBot] Manual close requested for position {}: {}",
+                positionId, signal.getTicker());
+
+        String result = closePositions(signal);
+
+        openedPositions.remove(positionId);
+        log.info("[FundingBot] Position {} closed manually", positionId);
+
+        return String.format("Position %s (%s) closed\n%s",
+                positionId, signal.getTicker(), result);
     }
 }

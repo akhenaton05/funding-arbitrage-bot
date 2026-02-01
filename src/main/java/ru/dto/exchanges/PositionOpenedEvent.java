@@ -15,4 +15,5 @@ public class PositionOpenedEvent {
     private final String extDirection;
     private final String astDirection;
     private final String mode;
+    private boolean success;
 }

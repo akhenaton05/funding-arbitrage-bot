@@ -75,6 +75,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
             case "/untrack" -> fundingContext.removeSubscriberId(chatId);
             case "/rates" -> sendRates(chatId);
             case "/trades" -> getTrades(chatId);
+            case "/close" -> closePositionById(chatId, parts);
+            case "/closeall" -> closeAllPositions();
         }
     }
 
@@ -106,6 +108,37 @@ public class TelegramChatService extends TelegramLongPollingBot {
             sendMessage(chatId, " Error getting data");
             log.error("Error sending rates", e);
         }
+    }
+
+    private void closeAllPositions() {
+        log.info("Request to close all positions");
+        exchangesService.closeAllPositions();
+    }
+
+    private void closePositionById(Long chatId, String[] parts) {
+        log.info("[Telegram] Close by ID request from chat {}", chatId);
+
+        // Проверяем что есть параметр
+        if (parts.length < 2 || parts[1].trim().isEmpty()) {
+            sendMessage(chatId,
+                    "🤖 *FundingBot:* *Usage:* `/close <position_id>`\n\n" +
+                            "*Example:* `/close P-0001`\n\n" +
+                            "Use /trades to see active positions");
+            return;
+        }
+
+        String positionId = parts[1].trim().toUpperCase();
+
+        //Checking the format ID (P-0001, P-0002...)
+        if (!positionId.matches("P-\\d{4}")) {
+            sendMessage(chatId,
+                    "🤖 *FundingBot:* Invalid position ID format\n\n" +
+                            "*Format:* `P-XXXX` (e.g. `P-0001`)\n\n" +
+                            "Use /trades to see active positions");
+            return;
+        }
+
+        exchangesService.closePositionById(positionId);
     }
 
     public void sendMessage(Long chatId, String text) {
@@ -231,9 +264,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
     }
 
     private String formatPositionOpenedMessage(PositionOpenedEvent event) {
-        if (event.getResult() != null &&
-                (event.getResult().contains("Error") || event.getResult().contains("Failed"))) {
-
+        if (!event.isSuccess()) {
             return String.format(
                     "🤖 *FundingBot:* Position Opening Failed ❌\n\n" +
                             "*Position ID:* %s\n" +

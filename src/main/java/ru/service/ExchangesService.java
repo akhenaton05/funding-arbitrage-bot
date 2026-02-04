@@ -178,7 +178,7 @@ public class ExchangesService {
     }
 
     // Calculating predicted funding for aster
-    @Scheduled(cron = "0 59 * * * *", zone = "UTC")
+    @Scheduled(cron = "0 00 * * * *", zone = "UTC")
     private void predictAsterFunding() {
         if (openedPositions.isEmpty()) {
             log.debug("[FundingBot] No open positions");
@@ -199,7 +199,7 @@ public class ExchangesService {
         log.info("[FundingBot] Aster funding prediction completed");
     }
 
-    @Scheduled(fixedDelay = 300000) // Каждые 5 минут
+    @Scheduled(fixedDelay = 300000) //Every 5 mins
     public void updateOpenPositionsPnL() {
         if (openedPositions.isEmpty()) {
             return;
@@ -319,7 +319,7 @@ public class ExchangesService {
 
         //Waiting 3 sec before validation opened positions
         try {
-            Thread.sleep(3000);
+            Thread.sleep(4000);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("[FundingBot] Interrupted during sleep", e);
@@ -553,12 +553,14 @@ public class ExchangesService {
                     extPositions.getFirst(),
                     false
             );
+            log.info("[FundingBot] Extended notional for position: {}", extData);
 
             PositionNotionalData asterData = calculateAsterNotional(
                     asterPositions.getFirst(),
                     0,
                     false
             );
+            log.info("[FundingBot] Aster notional for position: {}", asterData);
 
             double totalOpenFees = extData.getFee() + asterData.getFee();
 
@@ -869,7 +871,11 @@ public class ExchangesService {
                     signal.getExtDirection().toString()
             );
 
+            log.info("[FundingBot] Extended position data {}", extPositions);
+
             List<AsterPosition> asterPositions = asterClient.getPositions(astSymbol);
+
+            log.info("[FundingBot] Aster position data {}", asterPositions);
 
             if (extPositions == null || extPositions.isEmpty()) {
                 log.warn("[FundingBot] Extended position not found for {}", signal.getId());
@@ -885,6 +891,7 @@ public class ExchangesService {
             pnlData.setExtUnrealizedPnl(
                     Double.parseDouble(extPositions.getFirst().getUnrealisedPnl())
             );
+            log.info("[FundingBot] Extended unreleased PnL {}", extPositions.getFirst().getUnrealisedPnl());
 
             AsterPosition asterPos = null;
             for (AsterPosition pos : asterPositions) {
@@ -892,6 +899,7 @@ public class ExchangesService {
                     pnlData.setAsterUnrealizedPnl(
                             Double.parseDouble(pos.getUnrealizedProfit())
                     );
+                    log.info("[FundingBot] Aster unreleased PnL {}", Double.parseDouble(pos.getUnrealizedProfit()));
                     asterPos = pos;
                     break;
                 }

@@ -4,8 +4,6 @@ import lombok.Builder;
 import lombok.Data;
 import ru.dto.funding.HoldingMode;
 
-import java.util.UUID;
-
 @Data
 @Builder
 public class FundingCloseSignal {

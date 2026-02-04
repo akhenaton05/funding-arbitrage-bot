@@ -23,6 +23,7 @@ import ru.dto.funding.PositionPnLData;
 import ru.event.FundingAlertEvent;
 import ru.utils.FundingArbitrageContext;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -378,17 +379,13 @@ public class TelegramChatService extends TelegramLongPollingBot {
             return "Failed to calculate P&L";
         }
 
-        long heldMinutes = LocalDateTime.now()
-                .atZone(ZoneOffset.UTC)
-                .toInstant()
-                .toEpochMilli() -
-                pnlData.getOpenTime()
-                        .atZone(ZoneOffset.UTC)
-                        .toInstant()
-                        .toEpochMilli();
+        Duration duration = Duration.between(
+                pnlData.getOpenTime(),
+                LocalDateTime.now(ZoneOffset.UTC)
+        );
 
-        long heldHours = heldMinutes / 60;
-        long remainingMinutes = heldMinutes % 60;
+        long heldHours = duration.toHours();
+        long heldMinutes = duration.toMinutesPart();
 
         StringBuilder sb = new StringBuilder();
         sb.append("Position P&L: ").append(pnlData.getPositionId()).append("\n");
@@ -397,7 +394,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         if (heldHours > 0) {
             sb.append(heldHours).append("h ");
         }
-        sb.append(remainingMinutes).append("m\n\n");
+        sb.append(heldMinutes).append("m\n\n");
 
         sb.append("Gross P&L:  ").append(formatMoney(pnlData.getGrossPnl())).append("\n");
         sb.append("Funding:    ").append(formatMoney(pnlData.getTotalFundingNet())).append("\n");

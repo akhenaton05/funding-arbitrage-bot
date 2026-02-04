@@ -389,21 +389,21 @@ public class TelegramChatService extends TelegramLongPollingBot {
         long heldMinutes = duration.toMinutesPart();
 
         StringBuilder sb = new StringBuilder();
-        sb.append("Position P&L: ").append(pnlData.getPositionId()).append("\n");
-        sb.append("Ticker: ").append(pnlData.getTicker());
-        sb.append(" | Held: ");
+        sb.append("🤖 *FundingBot:* Position P&L: ").append(pnlData.getPositionId()).append("\n");
+        sb.append("*Ticker:* ").append(pnlData.getTicker());
+        sb.append(" *| Held:* ");
         if (heldHours > 0) {
             sb.append(heldHours).append("h ");
         }
         sb.append(heldMinutes).append("m\n\n");
 
-        sb.append("Gross P&L:  ").append(formatMoney(pnlData.getGrossPnl())).append("\n");
-        sb.append("Funding:    ").append(formatMoney(pnlData.getTotalFundingNet())).append("\n");
-        sb.append("Fees:       -").append(String.format("%.4f USD", pnlData.getTotalOpenFees() + pnlData.getTotalCloseFees())).append("\n\n");
+        sb.append("*Gross P&L:* ").append(formatMoney(pnlData.getGrossPnl())).append("\n");
+        sb.append("*Funding:* ").append(formatMoney(pnlData.getTotalFundingNet())).append("\n");
+        sb.append("*Fees:* -").append(String.format("%.4f USD", pnlData.getTotalOpenFees() + pnlData.getTotalCloseFees())).append("\n\n");
 
         double netPnl = pnlData.getNetPnl();
         String sign = netPnl >= 0 ? "+" : "";
-        sb.append("Net P&L: ").append(sign).append(String.format("%.4f USD", netPnl));
+        sb.append("*Net P&L:* ").append(sign).append(String.format("%.4f USD", netPnl));
 
         return sb.toString();
     }

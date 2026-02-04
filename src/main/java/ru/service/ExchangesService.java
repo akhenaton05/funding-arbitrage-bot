@@ -555,8 +555,17 @@ public class ExchangesService {
             );
             log.info("[FundingBot] Extended notional for position: {}", extData);
 
+            AsterPosition curPosition = asterPositions.stream()
+                    .filter(p -> p.getPositionSide().equalsIgnoreCase(signal.getAsterDirection().toString()))
+                    .findFirst()
+                    .orElse(null);
+
+            if (Objects.isNull(curPosition)) {
+                log.info("[FundingBot] Error parsing Aster position! Check logs!");
+            }
+
             PositionNotionalData asterData = calculateAsterNotional(
-                    asterPositions.getFirst(),
+                    curPosition,
                     0,
                     false
             );
@@ -573,7 +582,7 @@ public class ExchangesService {
             PositionPnLData pnlData = PositionPnLData.builder()
                     .positionId(positionId)
                     .ticker(signal.getTicker())
-                    .openTime(LocalDateTime.now())
+                    .openTime(LocalDateTime.now(ZoneOffset.UTC))
                     .totalOpenFees(totalOpenFees)
                     .totalCloseFees(0.0)
                     .extendedFundingNet(0.0)

@@ -766,13 +766,13 @@ public class ExchangesService {
 
         String extSymbol = signal.getTicker() + "-USD";
 
-        // Время открытия в ms
+        //Position open time
         long openTime = pnlData.getOpenTime()
                 .atZone(ZoneOffset.UTC)
                 .toInstant()
                 .toEpochMilli();
 
-        // Получаем историю из API
+        //Getting funding history
         ExtendedFundingHistoryResponse history = extendedClient.getFundingHistory(
                 extSymbol,
                 signal.getExtDirection().toString(),
@@ -780,12 +780,16 @@ public class ExchangesService {
                 10000
         );
 
+        if(pnlData.getExtendedFundingNet() == 0) {
+            pnlData.setInitialExtFunding(history.getSummary().getNetFunding());
+        }
+
         if (history == null || history.getSummary() == null) {
             log.warn("[FundingBot] Failed to get Extended funding for {}", signal.getId());
             return;
         }
 
-        double netFunding = history.getSummary().getNetFunding();
+        double netFunding = history.getSummary().getNetFunding() - pnlData.getInitialExtFunding();
         pnlData.setExtendedFundingNet(netFunding);
         pnlData.calculateTotals();
 

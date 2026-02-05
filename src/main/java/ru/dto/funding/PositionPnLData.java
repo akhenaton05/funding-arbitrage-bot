@@ -15,6 +15,7 @@ public class PositionPnLData {
     private double extOpenPrice;
     private double totalOpenFees;
     private double totalCloseFees;
+    private double initialExtFunding;
     private double extendedFundingNet;
     private double asterFundingNet;
     private double extUnrealizedPnl;

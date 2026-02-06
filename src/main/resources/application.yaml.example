@@ -8,3 +8,20 @@ proxy:
 telegram:
   bot-token: your-bot-token
   bot-username: your-bot-username
+
+funding:
+  thresholds:
+    smartModeRate: 50
+    fastModeRate: 150
+
+  # Fast Mode
+  fast:
+    leverage: 7
+
+  # Smart Mode
+  smart:
+    leverage: 5
+    checkDelayMs: 300000  # 5 min
+    maxHoldMinutes: 1440  # 24 hrs
+    badStreakThreshold: 2
+    closeThreshold: 10

@@ -18,6 +18,7 @@ import ru.client.ExchangeClient;
 import ru.dto.exchanges.MarginType;
 import ru.dto.exchanges.aster.AsterPosition;
 import ru.dto.exchanges.aster.OrderResponse;
+import ru.dto.exchanges.aster.PremiumIndexResponse;
 import ru.dto.exchanges.aster.SymbolFilter;
 
 import javax.crypto.Mac;
@@ -591,25 +592,132 @@ public class AsterClient implements ExchangeClient {
         throw new RuntimeException("[Aster] API error: " + code + " → " + body);
     }
 
-    public Double getWalletBalanceUsdt() {
+    public int getMaxLeverage(String symbol) {
         try {
-            String json = executeSignedRequest("GET", "/fapi/v2/balance", "recvWindow=5000");
-            if (json == null) return 0.0;
+            log.info("[Aster] Getting max leverage for {}", symbol);
 
-            JsonNode root = objectMapper.readTree(json);
-            if (!root.isArray() || root.isEmpty()) return 0.0;
+            String queryParams = "symbol=" + symbol;
+            String response = executeSignedRequest("GET", "/fapi/v1/leverageBracket", queryParams);
 
-            for (JsonNode node : root) {
-                if ("USDT".equals(node.path("asset").asText())) {
-                    double wallet = node.path("balance").asDouble(0.0); // wallet balance [web:67]
-                    log.info("[Aster] Wallet balance USDT: {}", wallet);
-                    return wallet;
-                }
+            if (response == null || response.isEmpty()) {
+                log.warn("[Aster] Empty response for leverage info, using default mode parameter or 10");
+                return 10;
             }
-            return 0.0;
+
+            log.debug("[Aster] Leverage response: {}", response);
+
+            Map<String, Object> data = objectMapper.readValue(response, Map.class);
+            List<Map<String, Object>> brackets = (List<Map<String, Object>>) data.get("brackets");
+
+            if (brackets != null && !brackets.isEmpty()) {
+                Map<String, Object> firstBracket = brackets.get(0);
+                Integer maxLeverage = (Integer) firstBracket.get("initialLeverage");
+
+                log.info("[Aster] Max leverage for {}: {}x", symbol, maxLeverage);
+                return maxLeverage;
+            }
+
+            log.warn("[Aster] No brackets found for {}, using using default mode parameter or 10", symbol);
+            return 10;
+
         } catch (Exception e) {
-            log.error("[Aster] Error getting wallet balance", e);
+            log.error("[Aster] Failed to get max leverage for {}, using default mode parameter or 10", symbol, e);
+            return 10;
+        }
+    }
+
+//    //Funding rate info for ticker
+//    public long getMinutesUntilFunding(String symbol) {
+//        try {
+//            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/premiumIndex");
+//            builder.addParameter("symbol", symbol);
+//            URI uri = builder.build();
+//
+//            HttpGet get = new HttpGet(uri);
+//            log.info("[Aster] GET next funding time for {}", symbol);
+//
+//            try (CloseableHttpResponse resp = httpClient.execute(get)) {
+//                int code = resp.getCode();
+//                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+//
+//                if (code != 200) {
+//                    log.error("[Aster] Premium index failed: code={}, body={}", code, body);
+//                    return -1;
+//                }
+//
+//                JsonNode root = objectMapper.readTree(body);
+//                long nextFundingTime = root.path("nextFundingTime").asLong(0L);
+//
+//                if (nextFundingTime == 0) {
+//                    log.error("[Aster] nextFundingTime is 0 for {}", symbol);
+//                    return -1;
+//                }
+//
+//                long now = System.currentTimeMillis();
+//                long minutesUntil = (nextFundingTime - now) / (1000 * 60);
+//
+//                log.info("[Aster] Next funding for {} in {} minutes (at {})",
+//                        symbol,
+//                        minutesUntil,
+//                        new java.util.Date(nextFundingTime));
+//
+//                return minutesUntil;
+//            }
+//        } catch (Exception e) {
+//            log.error("[Aster] Error getting funding time for {}", symbol, e);
+//            return -1;
+//        }
+//    }
+
+    public PremiumIndexResponse getPremiumIndexInfo(String symbol) {
+        try {
+            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/premiumIndex");
+            builder.addParameter("symbol", symbol);
+            URI uri = builder.build();
+
+            HttpGet get = new HttpGet(uri);
+            log.info("[Aster] GET premium index info for {}", symbol);
+
+            try (CloseableHttpResponse resp = httpClient.execute(get)) {
+                int code = resp.getCode();
+                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+
+                if (code != 200) {
+                    log.error("[Aster] Premium index failed: code={}, body={}", code, body);
+                    return null;
+                }
+
+                PremiumIndexResponse response = objectMapper.readValue(body, PremiumIndexResponse.class);
+
+                log.info("[Aster] Premium index for {}: fundingRate={}%, nextFunding in {} min, markPrice={}",
+                        symbol,
+                        response.getLastFundingRateAsDouble() * 100,
+                        response.getMinutesUntilFunding(),
+                        response.getMarkPrice());
+
+                return response;
+            }
+        } catch (Exception e) {
+            log.error("[Aster] Error getting premium index for {}", symbol, e);
+            return null;
+        }
+    }
+
+    public long getMinutesUntilFunding(String symbol) {
+        PremiumIndexResponse info = getPremiumIndexInfo(symbol);
+        if (info == null) {
+            log.error("[Aster] Failed to get premium index for {}", symbol);
+            return -1;
+        }
+        return info.getMinutesUntilFunding();
+    }
+
+    public double getCurrentFundingRate(String symbol) {
+        PremiumIndexResponse info = getPremiumIndexInfo(symbol);
+        if (info == null) {
+            log.error("[Aster] Failed to get premium index for {}", symbol);
             return 0.0;
         }
+        return info.getLastFundingRateAsDouble();
     }
 }

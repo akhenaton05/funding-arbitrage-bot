@@ -9,9 +9,11 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import ru.config.FundingConfig;
 import ru.dto.exchanges.Direction;
 import ru.dto.exchanges.FundingOpenSignal;
 import ru.dto.funding.ArbitrageRates;
+import ru.dto.funding.HoldingMode;
 import ru.event.FundingAlertEvent;
 import ru.event.NewArbitrageEvent;
 import ru.utils.FundingArbitrageContext;
@@ -20,19 +22,21 @@ import javax.xml.bind.ValidationException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-@Service
 @Slf4j
+@Service
 public class FundingArbitrageService {
 
     private final ObjectMapper objectMapper;
     private final CloseableHttpClient httpClient;
     private final FundingArbitrageContext fundingContext;
     private final ApplicationEventPublisher eventPublisher;
+    private final FundingConfig fundingConfig;
     private static final String API_URL = "https://api.loris.tools/funding";
 
     public FundingArbitrageService(CloseableHttpClient httpClient,
                                    FundingArbitrageContext fundingContext,
-                                   ApplicationEventPublisher eventPublisher) {
+                                   ApplicationEventPublisher eventPublisher, FundingConfig fundingConfig) {
+        this.fundingConfig = fundingConfig;
         this.objectMapper = new ObjectMapper();
         this.httpClient = httpClient;
         this.fundingContext = fundingContext;
@@ -90,46 +94,76 @@ public class FundingArbitrageService {
         return arbitrageRates;
     }
 
-    @Scheduled(cron = "0 54 * * * *") // every hour at 54 minutes scanning
+    @Scheduled(cron = "0 54 * * * *")
     private void fundingTracker() {
         try {
             List<ArbitrageRates> arbitrageRates = calculateArbitrageRates();
 
             if (arbitrageRates.isEmpty()) {
-                log.warn("No arbitrage rates calculated");
+                log.warn("[FundingBot] No arbitrage rates calculated");
                 return;
             }
 
             ArbitrageRates topRate = arbitrageRates.getFirst();
+            double fundingRate = topRate.getArbitrageRate();
 
-            if (topRate.getArbitrageRate() > 70) {
-                log.info("High arbitrage detected: {} - {}%", topRate.getSymbol(), topRate.getArbitrageRate());
+            // Минимальный порог для открытия
+            double minRate = fundingConfig.getThresholds().getSmartModeRate();
 
-                //Sending Telegram Alert
-                for (Long chatId : fundingContext.getSubscriberIds()) {
-                    eventPublisher.publishEvent(
-                            new FundingAlertEvent(chatId, topRate)
-                    );
-
-                    //Sending alert to ExchangeService for positions opening
-                    FundingOpenSignal signal = convertToSignal(topRate);
-                    eventPublisher.publishEvent(new NewArbitrageEvent(signal));
-                }
-
+            if (fundingRate < minRate) {
+                log.info("[FundingBot] Skipping {}: {}bps < {}bps (min threshold)",
+                        topRate.getSymbol(), fundingRate, minRate);
+                return;
             }
-            log.info("No high arbitrage detected");
+
+            //Mode selecting
+            double fastThreshold = fundingConfig.getThresholds().getFastModeRate();
+            HoldingMode selectedMode;
+            int leverage;
+
+            if (fundingRate >= fastThreshold) {
+                // Fast Mode: >= 150 bps
+                selectedMode = HoldingMode.FAST_MODE;
+                leverage = fundingConfig.getFast().getLeverage();
+
+                log.info("[FundingBot] FastMode selected: {}bps >= {}bps",
+                        fundingRate, fastThreshold);
+                log.info("[FundingBot] Opening {} with {}x leverage (close after funding rate received)",
+                        topRate.getSymbol(), leverage);
+            } else {
+                // Smart Mode: 50-149 bps
+                selectedMode = HoldingMode.SMART_MODE;
+                leverage = fundingConfig.getSmart().getLeverage();
+
+                log.info("[FundingBot] SmartMode selected: {}bps < {}bps",
+                        fundingRate, fastThreshold);
+                log.info("[FundingBot] Opening {} with {}x leverage (hold until unprofitable)",
+                        topRate.getSymbol(), leverage);
+            }
+
+            //Sending event to listeners
+            for (Long chatId : fundingContext.getSubscriberIds()) {
+                eventPublisher.publishEvent(new FundingAlertEvent(chatId, topRate, selectedMode, leverage));
+
+                FundingOpenSignal signal = convertToSignal(topRate, selectedMode, leverage);
+                eventPublisher.publishEvent(new NewArbitrageEvent(signal));
+            }
+
         } catch (Exception e) {
-            log.error("Error in funding tracker", e);
+            log.error("[FundingBot] Error in funding tracker", e);
         }
     }
 
-    private FundingOpenSignal convertToSignal(ArbitrageRates rates) {
+    private FundingOpenSignal convertToSignal(ArbitrageRates rates, HoldingMode mode, Integer leverage) {
         boolean sellExtended = rates.getAction().startsWith("SELL extended");
 
         FundingOpenSignal signal = new FundingOpenSignal();
         signal.setTicker(rates.getSymbol());
         signal.setExtendedDirection(sellExtended ? Direction.SHORT : Direction.LONG);
         signal.setAsterDirection(sellExtended ? Direction.LONG : Direction.SHORT);
+        signal.setAction(rates.getAction());
+        signal.setMode(mode);
+        signal.setLeverage(leverage);
 
         return signal;
     }

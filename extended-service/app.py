@@ -790,6 +790,64 @@ def get_markets_info_proxy():
         logger.exception("get_markets_info_proxy failed")
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
+@app.route("/funding/history", methods=["GET"])
+def get_funding_history():
+    """
+    GET /funding/history?market=BTC-USD&side=LONG&fromTime=1234567890000&limit=100
+    Возвращает историю фандинга для позиции
+    """
+    market = request.args.get("market")
+    side = request.args.get("side")
+    from_time = request.args.get("fromTime")
+    limit = request.args.get("limit", "100")
+
+    try:
+        params = {}
+        if market:
+            params["market"] = market
+        if side:
+            params["side"] = side.upper()
+        if from_time:
+            params["fromTime"] = from_time
+        params["limit"] = limit
+
+        logger.info("GET funding history: params=%s", params)
+
+        status, data = _submit(
+            _extended_get("/api/v1/user/funding/history", params),
+            timeout_sec=30
+        )
+
+        if status == 200 and isinstance(data, dict) and data.get("data"):
+            # Дополнительно рассчитываем summary
+            payments = data.get("data", [])
+            total_received = 0.0
+            total_paid = 0.0
+
+            for payment in payments:
+                fee = float(payment.get("fundingFee", 0))
+                if fee > 0:
+                    total_received += fee
+                else:
+                    total_paid += abs(fee)
+
+            # Добавляем summary в ответ
+            data["summary"] = {
+                "total_received": total_received,
+                "total_paid": total_paid,
+                "net_funding": total_received - total_paid,
+                "payments_count": len(payments)
+            }
+
+            logger.info("Funding summary: received=%.4f paid=%.4f net=%.4f count=%d",
+                       total_received, total_paid, total_received - total_paid, len(payments))
+
+        return jsonify(data), status
+
+    except Exception as e:
+        logger.exception("get_funding_history failed")
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
 if __name__ == "__main__":
     logger.info("🌐 Starting on port %s | API_KEY=%s | VAULT=%s", PORT, bool(API_KEY), VAULT_ID)
     app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)

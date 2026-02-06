@@ -546,4 +546,72 @@ public class ExtendedClient implements ExchangeClient {
             return 0.0;
         }
     }
+
+    public ExtendedFundingHistoryResponse getFundingHistory(String market, String side, Long fromTime, Integer limit) {
+        try {
+            StringBuilder url = new StringBuilder(baseUrl + "/funding/history");
+            boolean hasParams = false;
+
+            if (market != null || side != null || fromTime != null || limit != null) {
+                url.append("?");
+
+                if (market != null) {
+                    url.append("market=").append(market);
+                    hasParams = true;
+                }
+
+                if (side != null) {
+                    if (hasParams) url.append("&");
+                    url.append("side=").append(side.toUpperCase());
+                    hasParams = true;
+                }
+
+                if (fromTime != null) {
+                    if (hasParams) url.append("&");
+                    url.append("fromTime=").append(fromTime);
+                    hasParams = true;
+                }
+
+                if (limit != null) {
+                    if (hasParams) url.append("&");
+                    url.append("limit=").append(limit);
+                }
+            }
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url.toString()))
+                    .timeout(Duration.ofSeconds(30))
+                    .GET()
+                    .build();
+
+            log.info("[Extended] GET funding history: {}", url);
+
+            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            int statusCode = response.statusCode();
+            String body = response.body();
+
+            if (statusCode != 200) {
+                log.error("[Extended] Funding history failed: code={}, body={}", statusCode, body);
+                return null;
+            }
+
+            ExtendedFundingHistoryResponse historyResponse = objectMapper.readValue(body, ExtendedFundingHistoryResponse.class);
+
+            if (!"OK".equalsIgnoreCase(historyResponse.getStatus())) {
+                log.warn("[Extended] Funding history status != OK: {}", historyResponse.getStatus());
+                return null;
+            }
+
+            log.info("[Extended] Funding history: {} payments, net funding: ${}",
+                    historyResponse.getSummary() != null ? historyResponse.getSummary().getPaymentsCount() : 0,
+                    historyResponse.getSummary() != null ? String.format("%.4f", historyResponse.getSummary().getNetFunding()) : "0");
+
+            return historyResponse;
+
+        } catch (Exception e) {
+            log.error("[Extended] Error getting funding history for {}", market, e);
+            return null;
+        }
+    }
 }

@@ -12,9 +12,11 @@ import ru.client.aster.AsterClient;
 import ru.client.extended.ExtendedClient;
 import ru.config.FundingConfig;
 import ru.dto.exchanges.*;
+import ru.dto.exchanges.aster.AsterBookTicker;
 import ru.dto.exchanges.aster.AsterPosition;
 import ru.dto.exchanges.aster.PremiumIndexResponse;
 import ru.dto.exchanges.extended.ExtendedFundingHistoryResponse;
+import ru.dto.exchanges.extended.ExtendedOrderBook;
 import ru.dto.exchanges.extended.ExtendedPosition;
 import ru.dto.funding.ArbitrageRates;
 import ru.dto.funding.HoldingMode;
@@ -395,13 +397,6 @@ public class ExchangesService {
         double balanceBefore = posBalance.getBalanceBefore();
         log.info("[FundingBot] Balance before closing positions: {}", balanceBefore);
 
-        //Calculating closing pnl
-        PositionPnLData pnlDataBefore = calculateCurrentPnL(signal);
-        if (pnlDataBefore != null) {
-            log.info("[FundingBot] Expected P&L before closing: ${}",
-                    String.format("%.4f", pnlDataBefore.getNetPnl()));
-        }
-
         CompletableFuture<String> extFuture = CompletableFuture.supplyAsync(() ->
                 extendedClient.closePosition(extSymbol, signal.getExtDirection().toString())
         );
@@ -419,6 +414,13 @@ public class ExchangesService {
         try {
             //Closing both positions at the same time
             CompletableFuture.allOf(extFuture, astFuture).get(30, TimeUnit.SECONDS);
+
+            //Calculating closing pnl
+            PositionPnLData pnlDataBefore = calculateCurrentPnL(signal);
+            if (pnlDataBefore != null) {
+                log.info("[FundingBot] Expected P&L before closing: ${}",
+                        String.format("%.4f", pnlDataBefore.getNetPnl()));
+            }
 
             //Waiting 20 sec for data to load up
             Thread.sleep(20000);
@@ -587,8 +589,8 @@ public class ExchangesService {
                     .totalCloseFees(0.0)
                     .extendedFundingNet(0.0)
                     .asterFundingNet(0.0)
-                    .extUnrealizedPnl(Double.parseDouble(extPositions.getFirst().getUnrealisedPnl()))
-                    .asterUnrealizedPnl(Double.parseDouble(asterPositions.getFirst().getUnrealizedProfit()))
+                    .extUnrealizedPnl(0.0)
+                    .asterUnrealizedPnl(0.0)
                     .build();
 
             pnlData.calculateTotals();
@@ -710,7 +712,7 @@ public class ExchangesService {
     }
 
     public int validateLeverage(String symbol) {
-        int asterLeverage = asterClient.getMaxLeverage(symbol);
+        int asterLeverage = asterClient.getMaxLeverage(symbol + "USDT") ;
 
         log.info("[FundingBot] Aster leverage for {}: {}",
                 symbol, asterLeverage);
@@ -772,24 +774,26 @@ public class ExchangesService {
                 .toInstant()
                 .toEpochMilli();
 
+        log.info("[FundingBot] openTime is {}", openTime);
+        log.info("[FundingBot] openTime from signal {}", signal.getOpenedAtMs());
+
         //Getting funding history
         ExtendedFundingHistoryResponse history = extendedClient.getFundingHistory(
                 extSymbol,
                 signal.getExtDirection().toString(),
-                openTime,
-                10000
+                signal.getOpenedAtMs(),
+                1000
         );
 
-        if(pnlData.getExtendedFundingNet() == 0) {
-            pnlData.setInitialExtFunding(history.getSummary().getNetFunding());
-        }
+        log.info("[FundingBot] Funding history: {}", history);
 
         if (history == null || history.getSummary() == null) {
             log.warn("[FundingBot] Failed to get Extended funding for {}", signal.getId());
             return;
         }
 
-        double netFunding = history.getSummary().getNetFunding() - pnlData.getInitialExtFunding();
+        double netFunding = history.getSummary().getNetFunding();
+
         pnlData.setExtendedFundingNet(netFunding);
         pnlData.calculateTotals();
 
@@ -879,40 +883,104 @@ public class ExchangesService {
         }
 
         try {
+            // ==================== EXTENDED POSITION ====================
             List<ExtendedPosition> extPositions = extendedClient.getPositions(
                     extSymbol,
                     signal.getExtDirection().toString()
             );
 
-            log.info("[FundingBot] Extended position data {}", extPositions);
-
-            List<AsterPosition> asterPositions = asterClient.getPositions(astSymbol);
-
-            log.info("[FundingBot] Aster position data {}", asterPositions);
+            log.info("[FundingBot] Extended position data: {}", extPositions);
 
             if (extPositions == null || extPositions.isEmpty()) {
                 log.warn("[FundingBot] Extended position not found for {}", signal.getId());
                 return null;
             }
 
+            ExtendedPosition extPos = extPositions.getFirst();
+
+            // ✅ ПОЛУЧАЕМ РЕАЛЬНЫЕ ЦЕНЫ ИЗ ORDER BOOK
+            double extSize = Double.parseDouble(extPos.getSize());
+            double extEntryPrice = Double.parseDouble(extPos.getOpenPrice());
+            double extMarkPrice = Double.parseDouble(extPos.getMarkPrice());
+            boolean isExtLong = signal.getExtDirection() == Direction.LONG;
+
+            double extEffectivePrice;
+            String extPriceSource;
+
+            // Пытаемся получить Order Book
+            ExtendedOrderBook extBook = extendedClient.getOrderBook(extSymbol);
+
+            if (extBook != null && extBook.getBid() != null && !extBook.getBid().isEmpty()
+                    && extBook.getAsk() != null && !extBook.getAsk().isEmpty()) {
+
+                // ✅ ИСПОЛЬЗУЕМ РЕАЛЬНЫЙ BID/ASK ИЗ ORDER BOOK
+                double extBidPrice = Double.parseDouble(extBook.getBid().get(0).getPrice());
+                double extAskPrice = Double.parseDouble(extBook.getAsk().get(0).getPrice());
+
+                // LONG закрываем SELL → используем BID
+                // SHORT закрываем BUY → используем ASK
+                extEffectivePrice = isExtLong ? extBidPrice : extAskPrice;
+                extPriceSource = "OrderBook";
+
+                double extSpread = ((extAskPrice - extBidPrice) / extMarkPrice) * 100;
+
+                log.info("[Extended] Order Book: mark={}, bid={}, ask={}, spread={}%, effective={}",
+                        String.format("%.6f", extMarkPrice),
+                        String.format("%.6f", extBidPrice),
+                        String.format("%.6f", extAskPrice),
+                        String.format("%.3f", extSpread),
+                        String.format("%.6f", extEffectivePrice));
+
+            } else {
+                // ⚠️ FALLBACK: Order Book недоступен → используем фиксированный slippage
+                log.warn("[Extended] Order Book unavailable for {}, using fixed slippage", extSymbol);
+
+                double extSlippage = 0.004; // 0.4% fallback slippage
+                extEffectivePrice = isExtLong
+                        ? extMarkPrice * (1 - extSlippage)  // BID estimate
+                        : extMarkPrice * (1 + extSlippage);  // ASK estimate
+                extPriceSource = "MarkPrice+Slippage";
+
+                log.info("[Extended] Fallback: mark={}, slippage={}%, effective={}",
+                        String.format("%.6f", extMarkPrice),
+                        String.format("%.1f", extSlippage * 100),
+                        String.format("%.6f", extEffectivePrice));
+            }
+
+            // Рассчитываем P&L с реальной/оценочной ценой
+            double extCalculatedPnl = isExtLong
+                    ? extSize * (extEffectivePrice - extEntryPrice)
+                    : extSize * (extEntryPrice - extEffectivePrice);
+
+            double extApiPnl = Double.parseDouble(extPos.getUnrealisedPnl());
+            double extSlippageImpact = extCalculatedPnl - extApiPnl;
+
+            pnlData.setExtUnrealizedPnl(extCalculatedPnl);
+
+            log.info("[Extended] P&L: size={}, entry={}, effective={} ({})",
+                    String.format("%.4f", extSize),
+                    String.format("%.6f", extEntryPrice),
+                    String.format("%.6f", extEffectivePrice),
+                    extPriceSource);
+            log.info("[Extended] P&L: CALCULATED=${} (realistic), API=${}, Slippage Impact=${}",
+                    String.format("%.4f", extCalculatedPnl),
+                    String.format("%.4f", extApiPnl),
+                    String.format("%.4f", extSlippageImpact));
+
+            // ==================== ASTER POSITION ====================
+            List<AsterPosition> asterPositions = asterClient.getPositions(astSymbol);
+
+            log.info("[FundingBot] Aster position data: {}", asterPositions);
+
             if (asterPositions == null || asterPositions.isEmpty()) {
                 log.warn("[FundingBot] Aster position not found for {}", signal.getId());
                 return null;
             }
 
-            //Updating data
-            pnlData.setExtUnrealizedPnl(
-                    Double.parseDouble(extPositions.getFirst().getUnrealisedPnl())
-            );
-            log.info("[FundingBot] Extended unreleased PnL {}", extPositions.getFirst().getUnrealisedPnl());
-
+            // Find Aster position
             AsterPosition asterPos = null;
             for (AsterPosition pos : asterPositions) {
                 if (pos.getPositionSide().equalsIgnoreCase(signal.getAstDirection().toString())) {
-                    pnlData.setAsterUnrealizedPnl(
-                            Double.parseDouble(pos.getUnrealizedProfit())
-                    );
-                    log.info("[FundingBot] Aster unreleased PnL {}", Double.parseDouble(pos.getUnrealizedProfit()));
                     asterPos = pos;
                     break;
                 }
@@ -923,39 +991,113 @@ public class ExchangesService {
                 return null;
             }
 
-            //Closing fee calculation ATM
-            // Extended
-            PositionNotionalData extCloseData = calculateExtendedNotional(
-                    extPositions.getFirst(),
-                    true
-            );
-
-            // Aster
+            // Get premium index for mark price
             PremiumIndexResponse premium = asterClient.getPremiumIndexInfo(astSymbol);
             if (premium == null) {
                 log.warn("[FundingBot] Failed to get Aster premium index for {}", signal.getId());
                 return null;
             }
 
+            // ✅ ПОЛУЧАЕМ РЕАЛЬНЫЕ ЦЕНЫ ИЗ BOOK TICKER
+            double astSize = Math.abs(Double.parseDouble(asterPos.getPositionAmt()));
+            double astEntryPrice = Double.parseDouble(asterPos.getEntryPrice());
+            double astMarkPrice = premium.getMarkPriceAsDouble();
+            boolean isAstLong = signal.getAstDirection() == Direction.LONG;
+
+            double astEffectivePrice;
+            String astPriceSource;
+
+            // Пытаемся получить Book Ticker
+            AsterBookTicker asterTicker = asterClient.getBookTicker(astSymbol);
+
+            if (asterTicker != null && asterTicker.getBidPrice() != null && asterTicker.getAskPrice() != null) {
+
+                // ✅ ИСПОЛЬЗУЕМ РЕАЛЬНЫЙ BID/ASK ИЗ BOOK TICKER
+                double astBidPrice = Double.parseDouble(asterTicker.getBidPrice());
+                double astAskPrice = Double.parseDouble(asterTicker.getAskPrice());
+
+                // LONG закрываем SELL → используем BID
+                // SHORT закрываем BUY → используем ASK
+                astEffectivePrice = isAstLong ? astBidPrice : astAskPrice;
+                astPriceSource = "BookTicker";
+
+                double astSpread = ((astAskPrice - astBidPrice) / astMarkPrice) * 100;
+
+                log.info("[Aster] Book Ticker: mark={}, bid={}, ask={}, spread={}%, effective={}",
+                        String.format("%.6f", astMarkPrice),
+                        String.format("%.6f", astBidPrice),
+                        String.format("%.6f", astAskPrice),
+                        String.format("%.3f", astSpread),
+                        String.format("%.6f", astEffectivePrice));
+
+            } else {
+                // ⚠️ FALLBACK: Book Ticker недоступен → используем фиксированный slippage
+                log.warn("[Aster] Book Ticker unavailable for {}, using fixed slippage", astSymbol);
+
+                double astSlippage = 0.004; // 0.4% fallback slippage
+                astEffectivePrice = isAstLong
+                        ? astMarkPrice * (1 - astSlippage)  // BID estimate
+                        : astMarkPrice * (1 + astSlippage);  // ASK estimate
+                astPriceSource = "MarkPrice+Slippage";
+
+                log.info("[Aster] Fallback: mark={}, slippage={}%, effective={}",
+                        String.format("%.6f", astMarkPrice),
+                        String.format("%.1f", astSlippage * 100),
+                        String.format("%.6f", astEffectivePrice));
+            }
+
+            // Рассчитываем P&L с реальной/оценочной ценой
+            double astCalculatedPnl = isAstLong
+                    ? astSize * (astEffectivePrice - astEntryPrice)
+                    : astSize * (astEntryPrice - astEffectivePrice);
+
+            double astApiPnl = Double.parseDouble(asterPos.getUnrealizedProfit());
+            double astSlippageImpact = astCalculatedPnl - astApiPnl;
+
+            pnlData.setAsterUnrealizedPnl(astCalculatedPnl);
+
+            log.info("[Aster] P&L: size={}, entry={}, effective={} ({})",
+                    String.format("%.4f", astSize),
+                    String.format("%.6f", astEntryPrice),
+                    String.format("%.6f", astEffectivePrice),
+                    astPriceSource);
+            log.info("[Aster] P&L: CALCULATED=${} (realistic), API=${}, Slippage Impact=${}",
+                    String.format("%.4f", astCalculatedPnl),
+                    String.format("%.4f", astApiPnl),
+                    String.format("%.4f", astSlippageImpact));
+
+            // ==================== CLOSING FEES ====================
+            PositionNotionalData extCloseData = calculateExtendedNotional(
+                    extPos,
+                    true
+            );
+
             PositionNotionalData asterCloseData = calculateAsterNotional(
                     asterPos,
-                    premium.getMarkPriceAsDouble(),
+                    astMarkPrice,
                     true
             );
 
             double totalCloseFees = extCloseData.getFee() + asterCloseData.getFee();
             pnlData.setTotalCloseFees(totalCloseFees);
 
-            //Updating
+            // ==================== UPDATE TOTALS ====================
             pnlData.calculateTotals();
 
-            log.info("[FundingBot] {} Current P&L: gross=${}, funding=${}, openFees=${}, closeFees=${}, net=${}",
-                    signal.getId(),
-                    String.format("%.4f", pnlData.getGrossPnl()),
-                    String.format("%.4f", pnlData.getTotalFundingNet()),
-                    String.format("%.4f", pnlData.getTotalOpenFees()),
-                    String.format("%.4f", pnlData.getTotalCloseFees()),
-                    String.format("%.4f", pnlData.getNetPnl()));
+            log.info("[FundingBot] {} P&L Summary:", signal.getId());
+            log.info("  Extended:      ${} ({})",
+                    String.format("%.4f", pnlData.getExtUnrealizedPnl()),
+                    extPriceSource);
+            log.info("  Aster:         ${} ({})",
+                    String.format("%.4f", pnlData.getAsterUnrealizedPnl()),
+                    astPriceSource);
+            log.info("  Gross P&L:     ${}", String.format("%.4f", pnlData.getGrossPnl()));
+            log.info("  Funding:       ${}", String.format("%.4f", pnlData.getTotalFundingNet()));
+            log.info("  Open Fees:     ${}", String.format("%.4f", pnlData.getTotalOpenFees()));
+            log.info("  Close Fees:    ${}", String.format("%.4f", pnlData.getTotalCloseFees()));
+            log.info("  Net P&L:       ${}", String.format("%.4f", pnlData.getNetPnl()));
+            log.info("  Total Slippage Impact: ${}",
+                    String.format("%.4f", extSlippageImpact + astSlippageImpact));
 
             return pnlData;
 
@@ -964,6 +1106,8 @@ public class ExchangesService {
             return null;
         }
     }
+
+
 
     //Notional and fee calculation for extended
     private PositionNotionalData calculateExtendedNotional(ExtendedPosition position, boolean isClosing) {

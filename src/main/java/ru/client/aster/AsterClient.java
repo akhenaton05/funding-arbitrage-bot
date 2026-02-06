@@ -16,10 +16,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 import ru.client.ExchangeClient;
 import ru.dto.exchanges.MarginType;
-import ru.dto.exchanges.aster.AsterPosition;
-import ru.dto.exchanges.aster.OrderResponse;
-import ru.dto.exchanges.aster.PremiumIndexResponse;
-import ru.dto.exchanges.aster.SymbolFilter;
+import ru.dto.exchanges.aster.*;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -720,4 +717,178 @@ public class AsterClient implements ExchangeClient {
         }
         return info.getLastFundingRateAsDouble();
     }
+
+    /**
+     * Получает лучший BID/ASK для рынка (Book Ticker)
+     * @param symbol - символ (например, "BERUSDT")
+     * @return AsterBookTicker с bid/ask ценами или null
+     */
+    public AsterBookTicker getBookTicker(String symbol) {
+        try {
+            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/ticker/bookTicker");
+            builder.addParameter("symbol", symbol);
+            URI uri = builder.build();
+
+            HttpGet get = new HttpGet(uri);
+            log.debug("[Aster] GET book ticker for {}", symbol);
+
+            try (CloseableHttpResponse resp = httpClient.execute(get)) {
+                int code = resp.getCode();
+                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+
+                if (code != 200) {
+                    log.error("[Aster] Book ticker failed: code={}, body={}", code, body);
+                    return null;
+                }
+
+                AsterBookTicker ticker = objectMapper.readValue(body, AsterBookTicker.class);
+
+                log.info("[Aster] Book ticker {}: bid={} ({}), ask={} ({}), spread={}%",
+                        symbol,
+                        ticker.getBidPrice(),
+                        ticker.getBidQty(),
+                        ticker.getAskPrice(),
+                        ticker.getAskQty(),
+                        calculateSpread(ticker)
+                );
+
+                return ticker;
+            }
+        } catch (Exception e) {
+            log.error("[Aster] Error getting book ticker for {}", symbol, e);
+            return null;
+        }
+    }
+
+    /**
+     * Рассчитывает spread в процентах
+     */
+    private String calculateSpread(AsterBookTicker ticker) {
+        try {
+            double bid = Double.parseDouble(ticker.getBidPrice());
+            double ask = Double.parseDouble(ticker.getAskPrice());
+            double spread = ((ask - bid) / ask) * 100;
+            return String.format("%.3f", spread);
+        } catch (Exception e) {
+            return "N/A";
+        }
+    }
+
+    /**
+     * Получает лучший BID (цена продажи для LONG)
+     */
+    public Double getBestBid(String symbol) {
+        try {
+            AsterBookTicker ticker = getBookTicker(symbol);
+            if (ticker == null) {
+                return null;
+            }
+            return Double.parseDouble(ticker.getBidPrice());
+        } catch (Exception e) {
+            log.error("[Aster] Error getting best bid for {}", symbol, e);
+            return null;
+        }
+    }
+
+    /**
+     * Получает лучший ASK (цена покупки для SHORT)
+     */
+    public Double getBestAsk(String symbol) {
+        try {
+            AsterBookTicker ticker = getBookTicker(symbol);
+            if (ticker == null) {
+                return null;
+            }
+            return Double.parseDouble(ticker.getAskPrice());
+        } catch (Exception e) {
+            log.error("[Aster] Error getting best ask for {}", symbol, e);
+            return null;
+        }
+    }
+
+    /**
+     * Оценивает execution price на основе BID/ASK
+     * ПРИМЕЧАНИЕ: Aster НЕ поддерживает полный order book,
+     * поэтому для больших ордеров точность будет ниже
+     */
+    public Double estimateExecutionPrice(String symbol, double size, boolean isSell) {
+        try {
+            AsterBookTicker ticker = getBookTicker(symbol);
+
+            if (ticker == null) {
+                log.warn("[Aster] Book ticker unavailable for {}", symbol);
+                return null;
+            }
+
+            // Для Aster используем простую логику: BID для SELL, ASK для BUY
+            double price = isSell
+                    ? Double.parseDouble(ticker.getBidPrice())
+                    : Double.parseDouble(ticker.getAskPrice());
+
+            double availableQty = isSell
+                    ? Double.parseDouble(ticker.getBidQty())
+                    : Double.parseDouble(ticker.getAskQty());
+
+            log.info("[Aster] Execution estimate {}: size={}, price={}, available_qty={}, sufficient={}",
+                    symbol,
+                    String.format("%.4f", size),
+                    String.format("%.6f", price),
+                    String.format("%.4f", availableQty),
+                    size <= availableQty
+            );
+
+            // ⚠️ Если размер больше доступной ликвидности - добавляем penalty
+            if (size > availableQty) {
+                double penalty = isSell ? 0.998 : 1.002; // 0.2% penalty
+                price = price * penalty;
+                log.warn("[Aster] Insufficient liquidity at best price, applying {}% penalty",
+                        (Math.abs(1 - penalty) * 100));
+            }
+
+            return price;
+
+        } catch (Exception e) {
+            log.error("[Aster] Error estimating execution price for {}", symbol, e);
+            return null;
+        }
+    }
+
+    /**
+     * Получает последние сделки (для TWAP - если нужно)
+     * ПРИМЕЧАНИЕ: Binance/Aster API обычно возвращает до 500 сделок
+     */
+    public List<AsterTrade> getRecentTrades(String symbol, Integer limit) {
+        try {
+            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/trades");
+            builder.addParameter("symbol", symbol);
+            if (limit != null) {
+                builder.addParameter("limit", String.valueOf(limit));
+            }
+            URI uri = builder.build();
+
+            HttpGet get = new HttpGet(uri);
+            log.debug("[Aster] GET recent trades for {}", symbol);
+
+            try (CloseableHttpResponse resp = httpClient.execute(get)) {
+                int code = resp.getCode();
+                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+
+                if (code != 200) {
+                    log.error("[Aster] Recent trades failed: code={}, body={}", code, body);
+                    return null;
+                }
+
+                List<AsterTrade> trades = objectMapper.readValue(body,
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, AsterTrade.class));
+
+                log.info("[Aster] Recent trades {}: count={}", symbol, trades.size());
+
+                return trades;
+            }
+        } catch (Exception e) {
+            log.error("[Aster] Error getting recent trades for {}", symbol, e);
+            return null;
+        }
+    }
+
 }

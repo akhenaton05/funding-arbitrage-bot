@@ -94,7 +94,7 @@ public class FundingArbitrageService {
         return arbitrageRates;
     }
 
-    @Scheduled(cron = "0 54 * * * *")
+    @Scheduled(cron = "0 44 * * * *")
     private void fundingTracker() {
         try {
             List<ArbitrageRates> arbitrageRates = calculateArbitrageRates();

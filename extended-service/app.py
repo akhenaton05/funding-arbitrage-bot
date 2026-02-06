@@ -848,6 +848,156 @@ def get_funding_history():
         logger.exception("get_funding_history failed")
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
+@app.route("/api/v1/info/markets/<market>/orderbook", methods=["GET"])
+def get_order_book(market: str):
+    """
+    GET /api/v1/info/markets/BERA-USD/orderbook
+    Возвращает order book с bid/ask levels
+    """
+    try:
+        status, data = _submit(
+            _extended_get(f"/api/v1/info/markets/{market}/orderbook"),
+            timeout_sec=10
+        )
+
+        if status == 200 and isinstance(data, dict):
+            logger.info("Order book %s: bids=%d asks=%d",
+                       market,
+                       len(data.get("data", {}).get("bid", [])),
+                       len(data.get("data", {}).get("ask", [])))
+
+        return jsonify(data), status
+    except Exception as e:
+        logger.exception("get_order_book failed")
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+@app.route("/api/v1/info/markets/<market>/stats", methods=["GET"])
+def get_market_stats(market: str):
+    """
+    GET /api/v1/info/markets/BERA-USD/stats
+    Возвращает статистику рынка включая bid/ask/mark prices
+    """
+    try:
+        status, data = _submit(
+            _extended_get(f"/api/v1/info/markets/{market}/stats"),
+            timeout_sec=10
+        )
+
+        if status == 200 and isinstance(data, dict):
+            stats = data.get("data", {})
+            logger.info("Market stats %s: mark=%s bid=%s ask=%s",
+                       market,
+                       stats.get("markPrice"),
+                       stats.get("bidPrice"),
+                       stats.get("askPrice"))
+
+        return jsonify(data), status
+    except Exception as e:
+        logger.exception("get_market_stats failed")
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+@app.route("/api/v1/info/markets/<market>/trades", methods=["GET"])
+def get_recent_trades(market: str):
+    """
+    GET /api/v1/info/markets/BERA-USD/trades
+    Возвращает последние сделки на рынке
+    """
+    try:
+        status, data = _submit(
+            _extended_get(f"/api/v1/info/markets/{market}/trades"),
+            timeout_sec=10
+        )
+
+        if status == 200 and isinstance(data, dict):
+            trades = data.get("data", [])
+            logger.info("Recent trades %s: count=%d", market, len(trades))
+
+        return jsonify(data), status
+    except Exception as e:
+        logger.exception("get_recent_trades failed")
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+@app.route("/market/<market>/execution-price", methods=["POST"])
+def estimate_execution_price(market: str):
+    """
+    POST /market/BERA-USD/execution-price
+    Body: {"size": "271", "side": "SELL"}
+
+    Рассчитывает ожидаемую цену исполнения на основе order book
+    """
+    try:
+        body = request.get_json(force=True) or {}
+        size = Decimal(str(body.get("size", "0")))
+        side = str(body.get("side", "BUY")).upper()  # BUY/SELL
+
+        if size <= 0:
+            return jsonify({"status": "ERROR", "message": "invalid size"}), 400
+
+        # Получаем order book
+        status, book_data = _submit(
+            _extended_get(f"/api/v1/info/markets/{market}/orderbook"),
+            timeout_sec=10
+        )
+
+        if status != 200 or not isinstance(book_data, dict):
+            return jsonify({"status": "ERROR", "message": "failed to get order book"}), status
+
+        book = book_data.get("data", {})
+
+        # Берём нужную сторону: SELL -> bid, BUY -> ask
+        levels = book.get("bid" if side == "SELL" else "ask", [])
+
+        if not levels:
+            return jsonify({"status": "ERROR", "message": "no liquidity"}), 404
+
+        # Рассчитываем средневзвешенную цену
+        remaining = size
+        total_cost = Decimal("0")
+        filled_qty = Decimal("0")
+
+        for level in levels:
+            level_qty = Decimal(str(level.get("qty", "0")))
+            level_price = Decimal(str(level.get("price", "0")))
+
+            if remaining <= Decimal("0"):
+                break
+
+            fill_qty = min(remaining, level_qty)
+            total_cost += fill_qty * level_price
+            filled_qty += fill_qty
+            remaining -= fill_qty
+
+        if filled_qty <= Decimal("0"):
+            return jsonify({"status": "ERROR", "message": "insufficient liquidity"}), 400
+
+        avg_price = total_cost / filled_qty
+
+        # Если не хватило ликвидности
+        insufficient = remaining > Decimal("0")
+
+        result = {
+            "status": "OK",
+            "market": market,
+            "side": side,
+            "requested_size": str(size),
+            "filled_size": str(filled_qty),
+            "remaining_size": str(remaining),
+            "avg_execution_price": str(avg_price),
+            "total_cost": str(total_cost),
+            "insufficient_liquidity": insufficient,
+            "levels_used": len([l for l in levels if Decimal(str(l.get("qty", "0"))) > 0])
+        }
+
+        logger.info("Execution price %s %s %.2f: avg=%.6f insufficient=%s",
+                   market, side, float(size), float(avg_price), insufficient)
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.exception("estimate_execution_price failed")
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
 if __name__ == "__main__":
     logger.info("🌐 Starting on port %s | API_KEY=%s | VAULT=%s", PORT, bool(API_KEY), VAULT_ID)
     app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)

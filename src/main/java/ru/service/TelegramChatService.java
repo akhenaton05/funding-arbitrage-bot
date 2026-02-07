@@ -326,7 +326,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
                         "*Margin used:* %.2f USD\n" +
-                        "*Rate:* %s\n",
+                        "*Funding rate:* %s\n",
                 event.getPositionId(),
                 event.getMode(),
                 event.getTicker(),
@@ -336,6 +336,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
     }
 
     private String formatPositionClosedMessage(PositionClosedEvent event) {
+        String sign = event.getPnl() >= 0 ? "+" : "";
         if (!event.isSuccess()) {
             return String.format(
                     "🤖 *FundingBot:* Position Close Error ❌\n\n" +
@@ -354,7 +355,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*Position ID:* %s\n" +
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
-                        "*P&L:* %.2f USD (%.2f%%)\n",
+                        "*P&L:* " + sign + "%.2f USD (%.2f%%)\n",
                 event.getPositionId(),
                 event.getMode(),
                 event.getTicker(),
@@ -391,7 +392,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         long heldMinutes = duration.toMinutesPart();
 
         StringBuilder sb = new StringBuilder();
-        sb.append("🤖 *FundingBot:* Position P&L: ").append(pnlData.getPositionId()).append("\n");
+        sb.append("🤖 *FundingBot:* Position P&L: ").append(pnlData.getPositionId()).append("\n\n");
         sb.append("*Ticker:* ").append(pnlData.getTicker()).append("\n");
         sb.append("*Hold time:* ");
         if (heldHours > 0) {

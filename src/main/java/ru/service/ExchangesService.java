@@ -234,7 +234,7 @@ public class ExchangesService {
             return errorMsg;
         }
 
-        if (marginBalance <= 7) {
+        if (marginBalance <= 10) {
             String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
 
@@ -511,7 +511,7 @@ public class ExchangesService {
 
         //Adjusting balance for fees and price jumps
         double minBalance = Math.min(asterBalance, extendedBalance);
-        double safeBalance = minBalance * 0.9; // 90% of balance
+        double safeBalance = minBalance * 0.85; // 85% of balance
 
         log.info("[FundingBot] Balances: Aster=${}, Extended=${}, using ${}",
                 asterBalance, extendedBalance, safeBalance);

@@ -444,22 +444,19 @@ public class TelegramChatService extends TelegramLongPollingBot {
         return String.format("%+.4f USD", amount);
     }
 
-    /**
-     * ДОПОЛНИТЕЛЬНО: Компактная версия уведомления (для частых проверок)
-     */
     private String formatPnLThresholdMessage(PnLThresholdEvent event) {
         PositionPnLData pnl = event.getPnlData();
 
         return String.format(
-                "🤖 *FundingBot:* P&L Alert 🚀🚀\n" +
-                        "Position: `%s` | %s\n" +
-                        "ROI: *%.2f%%* | Net: $%.2f\n" +
-                        "Margin: $%.2f",
+                "🤖 *FundingBot:* P&L Alert \uD83D\uDCB0\n\n" +
+                        "*Position:* `%s`\n" +
+                        "*Ticker:* %s\n" +
+                        "*ROI:* %.2f%%\n" +
+                        "*Net:* $%.2f",
                 event.getPositionId(),
                 event.getTicker(),
                 event.getThresholdPercent(),
-                pnl.getNetPnl(),
-                event.getMarginUsed()
+                pnl.getNetPnl()
         );
     }
 }

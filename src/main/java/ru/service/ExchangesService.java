@@ -381,10 +381,39 @@ public class ExchangesService {
         openedPositions.put(positionToClose.getId(), positionToClose);
 
         //Funding validation for extended
-        updateExtendedFundingForPosition(positionToClose);
-        PositionPnLData extFunding = positionDataMap.get(positionId);
-        extFunding.setInitialExtFunding(extFunding.getExtendedFundingNet());
-        log.info("[FundingBot] Extended initial funding is {}", extFunding.getExtendedFundingNet());
+        PositionPnLData pnlData = positionDataMap.get(positionId);
+        if (pnlData != null) {
+            try {
+                ExtendedFundingHistoryResponse history = extendedClient.getFundingHistory(
+                        extSymbol,
+                        signal.getExtendedDirection().toString(),
+                        positionToClose.getOpenedAtMs(),
+                        1000
+                );
+
+                if (history != null && history.getSummary() != null) {
+                    double initialFunding = history.getSummary().getNetFunding();
+                    pnlData.setInitialExtFunding(initialFunding);
+                    pnlData.setExtendedFundingNet(0.0);
+                    pnlData.calculateTotals();
+
+                    log.info("[FundingBot] {} Extended funding baseline set at position open: ${} (will be subtracted from future readings)",
+                            positionId, String.format("%.4f", initialFunding));
+                } else {
+                    log.warn("[FundingBot] Failed to get Extended funding baseline for {}, will retry on next cycle",
+                            positionId);
+                    pnlData.setInitialExtFunding(0.0);
+                    pnlData.setExtendedFundingNet(0.0);
+                }
+            } catch (Exception e) {
+                log.error("[FundingBot] Error getting Extended funding baseline for {}: {}",
+                        positionId, e.getMessage());
+                pnlData.setInitialExtFunding(0.0);
+                pnlData.setExtendedFundingNet(0.0);
+            }
+        } else {
+            log.error("[FundingBot] P&L data not found for {} after validation!", positionId);
+        }
 
         String successMsg = "[FundingBot] Successfully opened positions | Extended: " + extendedOrderId +
                 " | Aster: " + asterOrderId + " | Mode: " + mode + ". Waiting for funding fees.";
@@ -521,7 +550,7 @@ public class ExchangesService {
         double extendedBalance = extendedClient.getBalance();
         if (extendedBalance == 0) throw new BalanceException("[Extended] Balance is 0");
 
-        //Adjusting balance for fees and price jumps
+        //Adjusting balance for fees and slippage while opening position
         double minBalance = Math.min(asterBalance, extendedBalance);
         double safeBalance = minBalance * 0.85; // 85% of balance
 
@@ -796,23 +825,31 @@ public class ExchangesService {
                 1000
         );
 
-        log.info("[FundingBot] Funding history: {}", history);
-
         if (history == null || history.getSummary() == null) {
             log.warn("[FundingBot] Failed to get Extended funding for {}", signal.getId());
             return;
         }
 
-        double netFunding = history.getSummary().getNetFunding() - pnlData.getInitialExtFunding();
-        log.info("[FundingBot] Current funding: {}", netFunding);
+        double currentTotal = history.getSummary().getNetFunding();
 
-        pnlData.setExtendedFundingNet(netFunding);
+        if (pnlData.getInitialExtFunding() == 0.0) {
+            pnlData.setInitialExtFunding(currentTotal);
+            pnlData.setExtendedFundingNet(0.0);
+
+            log.info("[FundingBot] {} Extended funding baseline initialized: ${}",
+                    signal.getId(), String.format("%.4f", currentTotal));
+        } else {
+            double netFunding = currentTotal - pnlData.getInitialExtFunding();
+            pnlData.setExtendedFundingNet(netFunding);
+
+            log.info("[FundingBot] {} Extended funding updated: baseline=${}, current=${}, net=${}",
+                    signal.getId(),
+                    String.format("%.4f", pnlData.getInitialExtFunding()),
+                    String.format("%.4f", currentTotal),
+                    String.format("%.4f", netFunding));
+        }
+
         pnlData.calculateTotals();
-
-        log.info("[FundingBot] {} Extended funding updated: net=${}, total_net=${}",
-                signal.getId(),
-                String.format("%.4f", netFunding),
-                String.format("%.4f", pnlData.getTotalFundingNet()));
     }
 
     private void addAsterFundingPrediction(FundingCloseSignal signal) {
@@ -1154,6 +1191,19 @@ public class ExchangesService {
         }
 
         if (notifiedPositions.contains(signal.getId())) {
+            return;
+        }
+
+        //Grace period check
+        long positionAgeMinutes = TimeUnit.MILLISECONDS.toMinutes(
+                System.currentTimeMillis() - signal.getOpenedAtMs()
+        );
+
+        long gracePeriodMinutes = 10; // First 10 min - no notis
+
+        if (positionAgeMinutes < gracePeriodMinutes) {
+            log.debug("[FundingBot] {} P&L check skipped - grace period (age: {}min, grace: {}min)",
+                    signal.getId(), positionAgeMinutes, gracePeriodMinutes);
             return;
         }
 

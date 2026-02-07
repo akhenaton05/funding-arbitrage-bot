@@ -14,4 +14,5 @@ public class PositionClosedEvent {
     private final double percent;
     private final boolean success;
     private final String mode;
+    private final double rate;
 }

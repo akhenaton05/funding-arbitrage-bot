@@ -614,4 +614,268 @@ public class ExtendedClient implements ExchangeClient {
             return null;
         }
     }
+
+    public ExtendedOrderBook getOrderBook(String market) {
+        try {
+            String url = baseUrl + "/api/v1/info/markets/" + market + "/orderbook";
+
+            log.debug("[Extended] GET order book: {}", url);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                log.error("[Extended] Order book failed: code={}, body={}",
+                        response.statusCode(), response.body());
+                return null;
+            }
+
+            ExtendedOrderBookResponse bookResponse = objectMapper.readValue(
+                    response.body(),
+                    ExtendedOrderBookResponse.class
+            );
+
+            if (!"OK".equalsIgnoreCase(bookResponse.getStatus())) {
+                log.warn("[Extended] Order book status != OK: {}", bookResponse.getStatus());
+                return null;
+            }
+
+            ExtendedOrderBook book = bookResponse.getData();
+
+            log.info("[Extended] Order book {}: bids={}, asks={}, best_bid={}, best_ask={}",
+                    market,
+                    book.getBid() != null ? book.getBid().size() : 0,
+                    book.getAsk() != null ? book.getAsk().size() : 0,
+                    book.getBid() != null && !book.getBid().isEmpty() ? book.getBid().get(0).getPrice() : "N/A",
+                    book.getAsk() != null && !book.getAsk().isEmpty() ? book.getAsk().get(0).getPrice() : "N/A"
+            );
+
+            return book;
+
+        } catch (Exception e) {
+            log.error("[Extended] Error getting order book for {}", market, e);
+            return null;
+        }
+    }
+
+    /**
+     * Получает статистику рынка (включая bid/ask/mark цены)
+     * @param market - название рынка (например, "BERA-USD")
+     * @return ExtendedMarketStats или null при ошибке
+     */
+    public ExtendedMarketStats getMarketStats(String market) {
+        try {
+            String url = baseUrl + "/api/v1/info/markets/" + market + "/stats";
+
+            log.debug("[Extended] GET market stats: {}", url);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                log.error("[Extended] Market stats failed: code={}, body={}",
+                        response.statusCode(), response.body());
+                return null;
+            }
+
+            ExtendedMarketStatsResponse statsResponse = objectMapper.readValue(
+                    response.body(),
+                    ExtendedMarketStatsResponse.class
+            );
+
+            if (!"OK".equalsIgnoreCase(statsResponse.getStatus())) {
+                log.warn("[Extended] Market stats status != OK: {}", statsResponse.getStatus());
+                return null;
+            }
+
+            ExtendedMarketStats stats = statsResponse.getData();
+
+            log.info("[Extended] Market stats {}: mark={}, bid={}, ask={}, last={}, spread={}%",
+                    market,
+                    stats.getMarkPrice(),
+                    stats.getBidPrice(),
+                    stats.getAskPrice(),
+                    stats.getLastPrice(),
+                    calculateSpread(stats)
+            );
+
+            return stats;
+
+        } catch (Exception e) {
+            log.error("[Extended] Error getting market stats for {}", market, e);
+            return null;
+        }
+    }
+
+    /**
+     * Рассчитывает spread в процентах
+     */
+    private String calculateSpread(ExtendedMarketStats stats) {
+        try {
+            double bid = Double.parseDouble(stats.getBidPrice());
+            double ask = Double.parseDouble(stats.getAskPrice());
+            double spread = ((ask - bid) / ask) * 100;
+            return String.format("%.3f", spread);
+        } catch (Exception e) {
+            return "N/A";
+        }
+    }
+
+    /**
+     * Оценивает цену исполнения на основе order book
+     * @param market - рынок
+     * @param size - размер ордера
+     * @param isSell - true для SELL, false для BUY
+     * @return средневзвешенная цена исполнения или null
+     */
+    public Double estimateExecutionPrice(String market, double size, boolean isSell) {
+        try {
+            ExtendedOrderBook book = getOrderBook(market);
+
+            if (book == null) {
+                log.warn("[Extended] Order book unavailable for {}", market);
+                return null;
+            }
+
+            List<OrderBookLevel> levels = isSell ? book.getBid() : book.getAsk();
+
+            if (levels == null || levels.isEmpty()) {
+                log.warn("[Extended] No liquidity in order book for {} {}",
+                        market, isSell ? "BIDS" : "ASKS");
+                return null;
+            }
+
+            double remainingSize = size;
+            double totalCost = 0.0;
+            double filledSize = 0.0;
+            int levelsUsed = 0;
+
+            for (OrderBookLevel level : levels) {
+                if (remainingSize <= 0.0001) break;
+
+                double levelQty = Double.parseDouble(level.getQty());
+                double levelPrice = Double.parseDouble(level.getPrice());
+
+                double fillQty = Math.min(remainingSize, levelQty);
+
+                totalCost += fillQty * levelPrice;
+                filledSize += fillQty;
+                remainingSize -= fillQty;
+                levelsUsed++;
+            }
+
+            if (filledSize < size * 0.5) {
+                log.warn("[Extended] Insufficient liquidity: filled={}/{} for {} {}",
+                        String.format("%.4f", filledSize),
+                        String.format("%.4f", size),
+                        market,
+                        isSell ? "SELL" : "BUY");
+                return null;
+            }
+
+            double avgPrice = totalCost / filledSize;
+
+            log.info("[Extended] Execution estimate {}: size={}, filled={}, avg_price={}, levels_used={}, insufficient={}",
+                    market,
+                    String.format("%.4f", size),
+                    String.format("%.4f", filledSize),
+                    String.format("%.6f", avgPrice),
+                    levelsUsed,
+                    remainingSize > 0.0001
+            );
+
+            return avgPrice;
+
+        } catch (Exception e) {
+            log.error("[Extended] Error estimating execution price for {}", market, e);
+            return null;
+        }
+    }
+
+    /**
+     * Получает лучший BID из order book (цена для продажи LONG)
+     */
+    public Double getBestBid(String market) {
+        try {
+            ExtendedOrderBook book = getOrderBook(market);
+            if (book == null || book.getBid() == null || book.getBid().isEmpty()) {
+                return null;
+            }
+            return Double.parseDouble(book.getBid().get(0).getPrice());
+        } catch (Exception e) {
+            log.error("[Extended] Error getting best bid for {}", market, e);
+            return null;
+        }
+    }
+
+    /**
+     * Получает лучший ASK из order book (цена для покупки SHORT)
+     */
+    public Double getBestAsk(String market) {
+        try {
+            ExtendedOrderBook book = getOrderBook(market);
+            if (book == null || book.getAsk() == null || book.getAsk().isEmpty()) {
+                return null;
+            }
+            return Double.parseDouble(book.getAsk().get(0).getPrice());
+        } catch (Exception e) {
+            log.error("[Extended] Error getting best ask for {}", market, e);
+            return null;
+        }
+    }
+
+    /**
+     * Получает последние сделки на рынке (для TWAP)
+     */
+    public List<ExtendedTrade> getRecentTrades(String market) {
+        try {
+            String url = baseUrl + "/api/v1/info/markets/" + market + "/trades";
+
+            log.debug("[Extended] GET recent trades: {}", url);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                log.error("[Extended] Recent trades failed: code={}, body={}",
+                        response.statusCode(), response.body());
+                return null;
+            }
+
+            ExtendedTradesResponse tradesResponse = objectMapper.readValue(
+                    response.body(),
+                    ExtendedTradesResponse.class
+            );
+
+            if (!"OK".equalsIgnoreCase(tradesResponse.getStatus())) {
+                log.warn("[Extended] Recent trades status != OK: {}", tradesResponse.getStatus());
+                return null;
+            }
+
+            log.info("[Extended] Recent trades {}: count={}",
+                    market,
+                    tradesResponse.getData() != null ? tradesResponse.getData().size() : 0);
+
+            return tradesResponse.getData();
+
+        } catch (Exception e) {
+            log.error("[Extended] Error getting recent trades for {}", market, e);
+            return null;
+        }
+    }
 }

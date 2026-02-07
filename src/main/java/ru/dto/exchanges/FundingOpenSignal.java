@@ -11,4 +11,5 @@ public class FundingOpenSignal {
     private String action;
     private HoldingMode mode;
     private int leverage;
+    private double rate;
 }

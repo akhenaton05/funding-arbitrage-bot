@@ -12,11 +12,12 @@ public class FundingConfig {
     private ThresholdsConfig thresholds;
     private FastModeConfig fast;
     private SmartModeConfig smart;
+    private PnLConfig pnl;
     
     @Data
     public static class ThresholdsConfig {
-        private double smartModeRate;  // 50 bps
-        private double fastModeRate;    // 150 bps
+        private double smartModeRate;
+        private double fastModeRate;
     }
     
     @Data
@@ -31,5 +32,12 @@ public class FundingConfig {
         private int maxHoldMinutes;
         private int badStreakThreshold;
         private double closeThreshold;
+    }
+
+    @Data
+    public static class PnLConfig {
+        private double thresholdPercent;
+        private long checkIntervalMs;
+        private boolean enableNotifications;
     }
 }

@@ -23,6 +23,7 @@ import ru.dto.funding.HoldingMode;
 import ru.dto.funding.PositionNotionalData;
 import ru.dto.funding.PositionPnLData;
 import ru.event.NewArbitrageEvent;
+import ru.event.PnLThresholdEvent;
 import ru.exceptions.BalanceException;
 import ru.exceptions.ClosingPositionException;
 import ru.exceptions.OpeningPositionException;
@@ -56,6 +57,7 @@ public class ExchangesService {
     private final Map<String, FundingCloseSignal> openedPositions = new ConcurrentHashMap<>();
     private final Map<String, PositionBalance> balanceMap = new ConcurrentHashMap<>();
     private final Map<String, PositionPnLData> positionDataMap = new ConcurrentHashMap<>();
+    private final Set<String> notifiedPositions = ConcurrentHashMap.newKeySet();
     private final AtomicLong positionIdCounter = new AtomicLong(1);
 
     @EventListener
@@ -211,7 +213,15 @@ public class ExchangesService {
 
         for (FundingCloseSignal signal : openedPositions.values()) {
             try {
-                calculateCurrentPnL(signal);
+                PositionPnLData pnlData = calculateCurrentPnL(signal);
+
+                if (pnlData == null) {
+                    continue;
+                }
+
+                // Проверяем threshold для уведомления
+                checkPnLThreshold(signal, pnlData);
+
             } catch (Exception e) {
                 log.error("[FundingBot] Failed to update P&L for {}: {}",
                         signal.getId(), e.getMessage());
@@ -470,6 +480,8 @@ public class ExchangesService {
                     signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
                     currentSpread
             ));
+
+            notifiedPositions.remove(signal.getId());
 
             return String.format("[FundingBot] Positions closed. P&L: %.4f USD (%.2f%%)", profit, profitPercent);
 
@@ -1134,5 +1146,52 @@ public class ExchangesService {
 
     public PositionPnLData pnlPositionCalculator(String posId) {
         return calculateCurrentPnL(openedPositions.get(posId));
+    }
+
+    private void checkPnLThreshold(FundingCloseSignal signal, PositionPnLData pnlData) {
+        if (!fundingConfig.getPnl().isEnableNotifications()) {
+            return;
+        }
+
+        if (notifiedPositions.contains(signal.getId())) {
+            return;
+        }
+
+        double netPnl = pnlData.getNetPnl();
+        double marginUsed = signal.getBalance();
+
+        double profitPercent = (netPnl / marginUsed) * 100;
+
+        double thresholdPercent = fundingConfig.getPnl().getThresholdPercent();
+
+        //Checking threshold
+        if (profitPercent >= thresholdPercent) {
+            log.info("[FundingBot] 🎯 P&L Threshold reached for {}: {}% (threshold: {}%)",
+                    signal.getId(),
+                    String.format("%.2f", profitPercent),
+                    String.format("%.2f", thresholdPercent));
+
+            //Sending notis
+            String mode = signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode";
+
+            eventPublisher.publishEvent(new PnLThresholdEvent(
+                    signal.getId(),
+                    signal.getTicker(),
+                    pnlData,
+                    profitPercent,
+                    marginUsed,
+                    mode
+            ));
+
+            //Adding to notified
+            notifiedPositions.add(signal.getId());
+
+            log.info("[FundingBot] P&L threshold notification sent for {}", signal.getId());
+        } else {
+            log.debug("[FundingBot] {} P&L: {}% (threshold: {}% - not reached)",
+                    signal.getId(),
+                    String.format("%.2f", profitPercent),
+                    String.format("%.2f", thresholdPercent));
+        }
     }
 }

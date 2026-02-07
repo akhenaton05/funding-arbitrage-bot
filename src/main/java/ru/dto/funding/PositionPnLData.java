@@ -27,6 +27,6 @@ public class PositionPnLData {
     public void calculateTotals() {
         this.totalFundingNet = extendedFundingNet + asterFundingNet;
         this.grossPnl = extUnrealizedPnl + asterUnrealizedPnl;
-        this.netPnl = grossPnl - totalOpenFees - totalCloseFees;
+        this.netPnl = grossPnl - totalOpenFees - totalCloseFees + totalFundingNet;
     }
 }

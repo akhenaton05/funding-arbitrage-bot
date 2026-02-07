@@ -94,7 +94,7 @@ public class FundingArbitrageService {
         return arbitrageRates;
     }
 
-    @Scheduled(cron = "0 44 * * * *")
+    @Scheduled(cron = "0 54 * * * *")
     private void fundingTracker() {
         try {
             List<ArbitrageRates> arbitrageRates = calculateArbitrageRates();
@@ -107,7 +107,6 @@ public class FundingArbitrageService {
             ArbitrageRates topRate = arbitrageRates.getFirst();
             double fundingRate = topRate.getArbitrageRate();
 
-            // Минимальный порог для открытия
             double minRate = fundingConfig.getThresholds().getSmartModeRate();
 
             if (fundingRate < minRate) {
@@ -145,7 +144,7 @@ public class FundingArbitrageService {
             for (Long chatId : fundingContext.getSubscriberIds()) {
                 eventPublisher.publishEvent(new FundingAlertEvent(chatId, topRate, selectedMode, leverage));
 
-                FundingOpenSignal signal = convertToSignal(topRate, selectedMode, leverage);
+                FundingOpenSignal signal = convertToSignal(topRate, selectedMode, leverage, fundingRate);
                 eventPublisher.publishEvent(new NewArbitrageEvent(signal));
             }
 
@@ -154,7 +153,7 @@ public class FundingArbitrageService {
         }
     }
 
-    private FundingOpenSignal convertToSignal(ArbitrageRates rates, HoldingMode mode, Integer leverage) {
+    private FundingOpenSignal convertToSignal(ArbitrageRates rates, HoldingMode mode, Integer leverage, double rate) {
         boolean sellExtended = rates.getAction().startsWith("SELL extended");
 
         FundingOpenSignal signal = new FundingOpenSignal();
@@ -164,6 +163,7 @@ public class FundingArbitrageService {
         signal.setAction(rates.getAction());
         signal.setMode(mode);
         signal.setLeverage(leverage);
+        signal.setRate(rate);
 
         return signal;
     }

@@ -16,4 +16,5 @@ public class PositionOpenedEvent {
     private final String astDirection;
     private final String mode;
     private boolean success;
+    private double rate;
 }

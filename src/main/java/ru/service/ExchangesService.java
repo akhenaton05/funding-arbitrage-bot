@@ -319,7 +319,7 @@ public class ExchangesService {
             return errorMsg;
         }
 
-        //Waiting 3 sec before validation opened positions
+        //Waiting 4 sec before validation opened positions
         try {
             Thread.sleep(4000);
         } catch (InterruptedException e) {
@@ -330,7 +330,7 @@ public class ExchangesService {
         // Validation for opened positions
         try {
             if (!validateOpenedPositions(extSymbol, astSymbol, signal, positionId)) {
-                log.error("[FundingBot] Position validation FAILED - positions were closed");
+                log.error("[FundingBot] Position validation failed - positions were closed");
 
                 //Calculations losses/profits
                 double balanceAfter = asterClient.getBalance() + extendedClient.getBalance();
@@ -360,6 +360,7 @@ public class ExchangesService {
                 .astDirection(signal.getAsterDirection())
                 .asterOrderId(asterOrderId)
                 .extendedOrderId(extendedOrderId)
+                .openedFundingRate(signal.getRate())
                 .action(signal.getAction())
                 .mode(mode)
                 .openedAtMs(System.currentTimeMillis())
@@ -368,6 +369,12 @@ public class ExchangesService {
                 .build();
 
         openedPositions.put(positionToClose.getId(), positionToClose);
+
+        //Funding validation for extended
+        updateExtendedFundingForPosition(positionToClose);
+        PositionPnLData extFunding = positionDataMap.get(positionId);
+        extFunding.setInitialExtFunding(extFunding.getExtendedFundingNet());
+        log.info("[FundingBot] Extended initial funding is {}", extFunding.getExtendedFundingNet());
 
         String successMsg = "[FundingBot] Successfully opened positions | Extended: " + extendedOrderId +
                 " | Aster: " + asterOrderId + " | Mode: " + mode + ". Waiting for funding fees.";
@@ -381,7 +388,8 @@ public class ExchangesService {
                 signal.getExtendedDirection().toString(),
                 signal.getAsterDirection().toString(),
                 mode.equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
-                true
+                true,
+                signal.getRate()
         ));
 
         log.info(successMsg);
@@ -410,6 +418,8 @@ public class ExchangesService {
                     }
                 }
         );
+
+        double currentSpread = 0.0;
 
         try {
             //Closing both positions at the same time
@@ -447,13 +457,18 @@ public class ExchangesService {
                     String.format("%.4f", profit),
                     String.format("%.2f", profitPercent));
 
+            //Collecting tare at closing
+            ArbitrageRates currentRate = getCurrentSpread(signal.getTicker());
+            currentSpread = currentRate.getArbitrageRate();
+
             eventPublisher.publishEvent(new PositionClosedEvent(
                     signal.getId(),
                     signal.getTicker(),
                     profit,
                     profitPercent,
                     true,
-                    signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode"
+                    signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
+                    currentSpread
             ));
 
             return String.format("[FundingBot] Positions closed. P&L: %.4f USD (%.2f%%)", profit, profitPercent);
@@ -467,7 +482,8 @@ public class ExchangesService {
                     0,
                     0,
                     false,
-                    signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode"
+                    signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
+                    signal.getCurrentFindingRate()
             ));
 
             return String.format("[FundingBot] %s Partial close - Manual check Needed!\n", signal.getTicker());
@@ -646,7 +662,8 @@ public class ExchangesService {
                 signal.getExtendedDirection().toString(),
                 signal.getAsterDirection().toString(),
                 signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
-                success
+                success,
+                signal.getRate()
         ));
     }
 
@@ -675,15 +692,6 @@ public class ExchangesService {
     }
 
     private boolean shouldCloseSmart(FundingCloseSignal pos, double currentSpread) {
-        int maxHoldMinutes = fundingConfig.getSmart().getMaxHoldMinutes();
-
-        long heldMinutes = getHeldMinutes(pos);
-        if (heldMinutes >= maxHoldMinutes) {
-            log.info("[FundingBot] Max hold time reached: {}min (max {})",
-                    heldMinutes, maxHoldMinutes);
-            return true;
-        }
-
         //Min rate allowed
         double threshold = fundingConfig.getSmart().getCloseThreshold();
 
@@ -739,12 +747,12 @@ public class ExchangesService {
         log.info("[FundingBot] Positions:\n{}", finalList);
     }
 
-    public String closePositionById(String positionId) {
+    public void closePositionById(String positionId) {
         FundingCloseSignal signal = openedPositions.get(positionId);
 
         if (signal == null) {
             log.warn("[FundingBot] Position {} not found", positionId);
-            return String.format("Position %s not found.", positionId);
+            return;
         }
 
         log.info("[FundingBot] Manual close requested for position {}: {}",
@@ -755,8 +763,6 @@ public class ExchangesService {
         openedPositions.remove(positionId);
         log.info("[FundingBot] Position {} closed manually", positionId);
 
-        return String.format("Position %s (%s) closed\n%s",
-                positionId, signal.getTicker(), result);
     }
 
     private void updateExtendedFundingForPosition(FundingCloseSignal signal) {
@@ -768,13 +774,6 @@ public class ExchangesService {
 
         String extSymbol = signal.getTicker() + "-USD";
 
-        //Position open time
-        long openTime = pnlData.getOpenTime()
-                .atZone(ZoneOffset.UTC)
-                .toInstant()
-                .toEpochMilli();
-
-        log.info("[FundingBot] openTime is {}", openTime);
         log.info("[FundingBot] openTime from signal {}", signal.getOpenedAtMs());
 
         //Getting funding history
@@ -792,7 +791,8 @@ public class ExchangesService {
             return;
         }
 
-        double netFunding = history.getSummary().getNetFunding();
+        double netFunding = history.getSummary().getNetFunding() - pnlData.getInitialExtFunding();
+        log.info("[FundingBot] Current funding: {}", netFunding);
 
         pnlData.setExtendedFundingNet(netFunding);
         pnlData.calculateTotals();
@@ -883,7 +883,6 @@ public class ExchangesService {
         }
 
         try {
-            // ==================== EXTENDED POSITION ====================
             List<ExtendedPosition> extPositions = extendedClient.getPositions(
                     extSymbol,
                     signal.getExtDirection().toString()
@@ -898,7 +897,7 @@ public class ExchangesService {
 
             ExtendedPosition extPos = extPositions.getFirst();
 
-            // ✅ ПОЛУЧАЕМ РЕАЛЬНЫЕ ЦЕНЫ ИЗ ORDER BOOK
+            //Getting data from OrderBook for better calculation
             double extSize = Double.parseDouble(extPos.getSize());
             double extEntryPrice = Double.parseDouble(extPos.getOpenPrice());
             double extMarkPrice = Double.parseDouble(extPos.getMarkPrice());
@@ -907,18 +906,18 @@ public class ExchangesService {
             double extEffectivePrice;
             String extPriceSource;
 
-            // Пытаемся получить Order Book
+            //Order Book request
             ExtendedOrderBook extBook = extendedClient.getOrderBook(extSymbol);
 
             if (extBook != null && extBook.getBid() != null && !extBook.getBid().isEmpty()
                     && extBook.getAsk() != null && !extBook.getAsk().isEmpty()) {
 
-                // ✅ ИСПОЛЬЗУЕМ РЕАЛЬНЫЙ BID/ASK ИЗ ORDER BOOK
-                double extBidPrice = Double.parseDouble(extBook.getBid().get(0).getPrice());
-                double extAskPrice = Double.parseDouble(extBook.getAsk().get(0).getPrice());
+                //Getting Bid and Ask prices
+                double extBidPrice = Double.parseDouble(extBook.getBid().getFirst().getPrice());
+                double extAskPrice = Double.parseDouble(extBook.getAsk().getFirst().getPrice());
 
-                // LONG закрываем SELL → используем BID
-                // SHORT закрываем BUY → используем ASK
+                // LONG closing SELL → using BID
+                // SHORT closing BUY → using ASK
                 extEffectivePrice = isExtLong ? extBidPrice : extAskPrice;
                 extPriceSource = "OrderBook";
 
@@ -932,7 +931,7 @@ public class ExchangesService {
                         String.format("%.6f", extEffectivePrice));
 
             } else {
-                // ⚠️ FALLBACK: Order Book недоступен → используем фиксированный slippage
+                //If Order Book unavailable → using slippage instead
                 log.warn("[Extended] Order Book unavailable for {}, using fixed slippage", extSymbol);
 
                 double extSlippage = 0.004; // 0.4% fallback slippage
@@ -947,7 +946,7 @@ public class ExchangesService {
                         String.format("%.6f", extEffectivePrice));
             }
 
-            // Рассчитываем P&L с реальной/оценочной ценой
+            //Calculating PnL
             double extCalculatedPnl = isExtLong
                     ? extSize * (extEffectivePrice - extEntryPrice)
                     : extSize * (extEntryPrice - extEffectivePrice);
@@ -962,12 +961,12 @@ public class ExchangesService {
                     String.format("%.6f", extEntryPrice),
                     String.format("%.6f", extEffectivePrice),
                     extPriceSource);
-            log.info("[Extended] P&L: CALCULATED=${} (realistic), API=${}, Slippage Impact=${}",
+            log.info("[Extended] P&L: Calculated=${} (realistic), API=${}, Slippage Impact=${}",
                     String.format("%.4f", extCalculatedPnl),
                     String.format("%.4f", extApiPnl),
                     String.format("%.4f", extSlippageImpact));
 
-            // ==================== ASTER POSITION ====================
+            //Aster calculations
             List<AsterPosition> asterPositions = asterClient.getPositions(astSymbol);
 
             log.info("[FundingBot] Aster position data: {}", asterPositions);
@@ -998,7 +997,7 @@ public class ExchangesService {
                 return null;
             }
 
-            // ✅ ПОЛУЧАЕМ РЕАЛЬНЫЕ ЦЕНЫ ИЗ BOOK TICKER
+            //Getting data from book ticker
             double astSize = Math.abs(Double.parseDouble(asterPos.getPositionAmt()));
             double astEntryPrice = Double.parseDouble(asterPos.getEntryPrice());
             double astMarkPrice = premium.getMarkPriceAsDouble();
@@ -1007,17 +1006,17 @@ public class ExchangesService {
             double astEffectivePrice;
             String astPriceSource;
 
-            // Пытаемся получить Book Ticker
+            //Sending book ticker request
             AsterBookTicker asterTicker = asterClient.getBookTicker(astSymbol);
 
             if (asterTicker != null && asterTicker.getBidPrice() != null && asterTicker.getAskPrice() != null) {
 
-                // ✅ ИСПОЛЬЗУЕМ РЕАЛЬНЫЙ BID/ASK ИЗ BOOK TICKER
+                //Using real bid\ask
                 double astBidPrice = Double.parseDouble(asterTicker.getBidPrice());
                 double astAskPrice = Double.parseDouble(asterTicker.getAskPrice());
 
-                // LONG закрываем SELL → используем BID
-                // SHORT закрываем BUY → используем ASK
+                // LONG closing SELL → using BID
+                // SHORT closing BUY → using ASK
                 astEffectivePrice = isAstLong ? astBidPrice : astAskPrice;
                 astPriceSource = "BookTicker";
 
@@ -1031,7 +1030,7 @@ public class ExchangesService {
                         String.format("%.6f", astEffectivePrice));
 
             } else {
-                // ⚠️ FALLBACK: Book Ticker недоступен → используем фиксированный slippage
+                //Using slippage if book ticker unavailable
                 log.warn("[Aster] Book Ticker unavailable for {}, using fixed slippage", astSymbol);
 
                 double astSlippage = 0.004; // 0.4% fallback slippage
@@ -1046,7 +1045,7 @@ public class ExchangesService {
                         String.format("%.6f", astEffectivePrice));
             }
 
-            // Рассчитываем P&L с реальной/оценочной ценой
+            //PnL calculation
             double astCalculatedPnl = isAstLong
                     ? astSize * (astEffectivePrice - astEntryPrice)
                     : astSize * (astEntryPrice - astEffectivePrice);
@@ -1061,12 +1060,12 @@ public class ExchangesService {
                     String.format("%.6f", astEntryPrice),
                     String.format("%.6f", astEffectivePrice),
                     astPriceSource);
-            log.info("[Aster] P&L: CALCULATED=${} (realistic), API=${}, Slippage Impact=${}",
+            log.info("[Aster] P&L: Calculated=${} (realistic), API=${}, Slippage Impact=${}",
                     String.format("%.4f", astCalculatedPnl),
                     String.format("%.4f", astApiPnl),
                     String.format("%.4f", astSlippageImpact));
 
-            // ==================== CLOSING FEES ====================
+            //Closing fees
             PositionNotionalData extCloseData = calculateExtendedNotional(
                     extPos,
                     true
@@ -1081,7 +1080,7 @@ public class ExchangesService {
             double totalCloseFees = extCloseData.getFee() + asterCloseData.getFee();
             pnlData.setTotalCloseFees(totalCloseFees);
 
-            // ==================== UPDATE TOTALS ====================
+            //Totals
             pnlData.calculateTotals();
 
             log.info("[FundingBot] {} P&L Summary:", signal.getId());
@@ -1107,8 +1106,6 @@ public class ExchangesService {
         }
     }
 
-
-
     //Notional and fee calculation for extended
     private PositionNotionalData calculateExtendedNotional(ExtendedPosition position, boolean isClosing) {
         double size = Double.parseDouble(position.getSize());
@@ -1130,7 +1127,7 @@ public class ExchangesService {
                 : Double.parseDouble(position.getEntryPrice());
 
         double notional = size * price;
-        double fee = notional * ASTER_TAKER_FEE;
+        double fee =  notional * ASTER_TAKER_FEE;
 
         return new PositionNotionalData(notional, fee, price, size);
     }

@@ -325,11 +325,13 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*Position ID:* %s\n" +
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
-                        "*Margin used:* %.2f USD\n",
+                        "*Margin used:* %.2f USD\n" +
+                        "*Rate:* %s\n",
                 event.getPositionId(),
                 event.getMode(),
                 event.getTicker(),
-                event.getBalanceUsed()
+                event.getBalanceUsed(),
+                event.getRate()
         );
     }
 
@@ -390,12 +392,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         StringBuilder sb = new StringBuilder();
         sb.append("🤖 *FundingBot:* Position P&L: ").append(pnlData.getPositionId()).append("\n");
-        sb.append("*Ticker:* ").append(pnlData.getTicker());
-        sb.append(" *| Held:* ");
+        sb.append("*Ticker:* ").append(pnlData.getTicker()).append("\n");
+        sb.append("*Hold time:* ");
         if (heldHours > 0) {
             sb.append(heldHours).append("h ");
         }
-        sb.append(heldMinutes).append("m\n\n");
+        sb.append(heldMinutes).append("m\n");
 
         sb.append("*Gross P&L:* ").append(formatMoney(pnlData.getGrossPnl())).append("\n");
         sb.append("*Funding:* ").append(formatMoney(pnlData.getTotalFundingNet())).append("\n");

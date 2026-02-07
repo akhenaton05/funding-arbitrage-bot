@@ -203,7 +203,7 @@ public class ExchangesService {
         log.info("[FundingBot] Aster funding prediction completed");
     }
 
-    @Scheduled(fixedDelay = 300000) //Every 5 mins
+    @Scheduled(fixedDelay = 300000) //Every 5 min
     public void updateOpenPositionsPnL() {
         if (openedPositions.isEmpty()) {
             return;
@@ -219,7 +219,6 @@ public class ExchangesService {
                     continue;
                 }
 
-                // Проверяем threshold для уведомления
                 checkPnLThreshold(signal, pnlData);
 
             } catch (Exception e) {
@@ -232,15 +231,14 @@ public class ExchangesService {
     //Main logic
 
     public String openPosition(FundingOpenSignal signal) {
-        String positionId = generatePositionId();
         double marginBalance = validateBalance();
 
         //Validating data for opening position
-        if(!validateFundingTime(signal)) {
+        if (!validateFundingTime(signal)) {
             String errorMsg = "[FundingBot] More than an hour until funding, position not opened";
             log.info("[FundingBot] More than an hour until funding, position not opened");
 
-            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
+            publishFailureEvent("P-0000", signal, errorMsg, marginBalance, false);
             return errorMsg;
         }
 
@@ -248,10 +246,11 @@ public class ExchangesService {
             String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
 
-            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
+            publishFailureEvent("P-0000", signal, errorMsg, marginBalance, false);
             return errorMsg;
         }
 
+        String positionId = generatePositionId();
         double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
         HoldingMode mode = signal.getMode();
 
@@ -761,7 +760,7 @@ public class ExchangesService {
     }
 
     public int validateLeverage(String symbol) {
-        int asterLeverage = asterClient.getMaxLeverage(symbol + "USDT") ;
+        int asterLeverage = asterClient.getMaxLeverage(symbol + "USDT");
 
         log.info("[FundingBot] Aster leverage for {}: {}",
                 symbol, asterLeverage);
@@ -799,7 +798,7 @@ public class ExchangesService {
         log.info("[FundingBot] Manual close requested for position {}: {}",
                 positionId, signal.getTicker());
 
-        String result = closePositions(signal);
+        closePositions(signal);
 
         openedPositions.remove(positionId);
         log.info("[FundingBot] Position {} closed manually", positionId);
@@ -1176,7 +1175,7 @@ public class ExchangesService {
                 : Double.parseDouble(position.getEntryPrice());
 
         double notional = size * price;
-        double fee =  notional * ASTER_TAKER_FEE;
+        double fee = notional * ASTER_TAKER_FEE;
 
         return new PositionNotionalData(notional, fee, price, size);
     }

@@ -663,11 +663,6 @@ public class ExtendedClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Получает статистику рынка (включая bid/ask/mark цены)
-     * @param market - название рынка (например, "BERA-USD")
-     * @return ExtendedMarketStats или null при ошибке
-     */
     public ExtendedMarketStats getMarketStats(String market) {
         try {
             String url = baseUrl + "/api/v1/info/markets/" + market + "/stats";
@@ -717,9 +712,6 @@ public class ExtendedClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Рассчитывает spread в процентах
-     */
     private String calculateSpread(ExtendedMarketStats stats) {
         try {
             double bid = Double.parseDouble(stats.getBidPrice());
@@ -731,13 +723,6 @@ public class ExtendedClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Оценивает цену исполнения на основе order book
-     * @param market - рынок
-     * @param size - размер ордера
-     * @param isSell - true для SELL, false для BUY
-     * @return средневзвешенная цена исполнения или null
-     */
     public Double estimateExecutionPrice(String market, double size, boolean isSell) {
         try {
             ExtendedOrderBook book = getOrderBook(market);
@@ -802,9 +787,6 @@ public class ExtendedClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Получает лучший BID из order book (цена для продажи LONG)
-     */
     public Double getBestBid(String market) {
         try {
             ExtendedOrderBook book = getOrderBook(market);
@@ -818,9 +800,6 @@ public class ExtendedClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Получает лучший ASK из order book (цена для покупки SHORT)
-     */
     public Double getBestAsk(String market) {
         try {
             ExtendedOrderBook book = getOrderBook(market);
@@ -834,9 +813,6 @@ public class ExtendedClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Получает последние сделки на рынке (для TWAP)
-     */
     public List<ExtendedTrade> getRecentTrades(String market) {
         try {
             String url = baseUrl + "/api/v1/info/markets/" + market + "/trades";

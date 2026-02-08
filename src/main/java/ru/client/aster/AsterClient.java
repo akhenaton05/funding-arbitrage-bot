@@ -623,49 +623,6 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-//    //Funding rate info for ticker
-//    public long getMinutesUntilFunding(String symbol) {
-//        try {
-//            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/premiumIndex");
-//            builder.addParameter("symbol", symbol);
-//            URI uri = builder.build();
-//
-//            HttpGet get = new HttpGet(uri);
-//            log.info("[Aster] GET next funding time for {}", symbol);
-//
-//            try (CloseableHttpResponse resp = httpClient.execute(get)) {
-//                int code = resp.getCode();
-//                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
-//
-//                if (code != 200) {
-//                    log.error("[Aster] Premium index failed: code={}, body={}", code, body);
-//                    return -1;
-//                }
-//
-//                JsonNode root = objectMapper.readTree(body);
-//                long nextFundingTime = root.path("nextFundingTime").asLong(0L);
-//
-//                if (nextFundingTime == 0) {
-//                    log.error("[Aster] nextFundingTime is 0 for {}", symbol);
-//                    return -1;
-//                }
-//
-//                long now = System.currentTimeMillis();
-//                long minutesUntil = (nextFundingTime - now) / (1000 * 60);
-//
-//                log.info("[Aster] Next funding for {} in {} minutes (at {})",
-//                        symbol,
-//                        minutesUntil,
-//                        new java.util.Date(nextFundingTime));
-//
-//                return minutesUntil;
-//            }
-//        } catch (Exception e) {
-//            log.error("[Aster] Error getting funding time for {}", symbol, e);
-//            return -1;
-//        }
-//    }
-
     public PremiumIndexResponse getPremiumIndexInfo(String symbol) {
         try {
             URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/premiumIndex");
@@ -718,11 +675,6 @@ public class AsterClient implements ExchangeClient {
         return info.getLastFundingRateAsDouble();
     }
 
-    /**
-     * Получает лучший BID/ASK для рынка (Book Ticker)
-     * @param symbol - символ (например, "BERUSDT")
-     * @return AsterBookTicker с bid/ask ценами или null
-     */
     public AsterBookTicker getBookTicker(String symbol) {
         try {
             URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/ticker/bookTicker");
@@ -760,9 +712,6 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Рассчитывает spread в процентах
-     */
     private String calculateSpread(AsterBookTicker ticker) {
         try {
             double bid = Double.parseDouble(ticker.getBidPrice());
@@ -774,9 +723,6 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Получает лучший BID (цена продажи для LONG)
-     */
     public Double getBestBid(String symbol) {
         try {
             AsterBookTicker ticker = getBookTicker(symbol);
@@ -790,9 +736,6 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Получает лучший ASK (цена покупки для SHORT)
-     */
     public Double getBestAsk(String symbol) {
         try {
             AsterBookTicker ticker = getBookTicker(symbol);
@@ -806,11 +749,6 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Оценивает execution price на основе BID/ASK
-     * ПРИМЕЧАНИЕ: Aster НЕ поддерживает полный order book,
-     * поэтому для больших ордеров точность будет ниже
-     */
     public Double estimateExecutionPrice(String symbol, double size, boolean isSell) {
         try {
             AsterBookTicker ticker = getBookTicker(symbol);
@@ -820,7 +758,6 @@ public class AsterClient implements ExchangeClient {
                 return null;
             }
 
-            // Для Aster используем простую логику: BID для SELL, ASK для BUY
             double price = isSell
                     ? Double.parseDouble(ticker.getBidPrice())
                     : Double.parseDouble(ticker.getAskPrice());
@@ -837,7 +774,7 @@ public class AsterClient implements ExchangeClient {
                     size <= availableQty
             );
 
-            // ⚠️ Если размер больше доступной ликвидности - добавляем penalty
+            //Если размер больше доступной ликвидности - добавляем penalty
             if (size > availableQty) {
                 double penalty = isSell ? 0.998 : 1.002; // 0.2% penalty
                 price = price * penalty;
@@ -853,10 +790,6 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Получает последние сделки (для TWAP - если нужно)
-     * ПРИМЕЧАНИЕ: Binance/Aster API обычно возвращает до 500 сделок
-     */
     public List<AsterTrade> getRecentTrades(String symbol, Integer limit) {
         try {
             URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/trades");
@@ -890,5 +823,4 @@ public class AsterClient implements ExchangeClient {
             return null;
         }
     }
-
 }

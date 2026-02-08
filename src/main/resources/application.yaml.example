@@ -25,3 +25,8 @@ funding:
     maxHoldMinutes: 1440  # 24 hrs
     badStreakThreshold: 2
     closeThreshold: 10
+
+  pnl:
+    thresholdPercent: 5
+    checkIntervalMs: 300000
+    enableNotifications: true

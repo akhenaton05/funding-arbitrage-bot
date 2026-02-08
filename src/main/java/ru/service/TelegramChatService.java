@@ -21,6 +21,7 @@ import ru.dto.funding.ArbitrageRates;
 import ru.dto.funding.HoldingMode;
 import ru.dto.funding.PositionPnLData;
 import ru.event.FundingAlertEvent;
+import ru.event.PnLThresholdEvent;
 import ru.utils.FundingArbitrageContext;
 
 import java.time.Duration;
@@ -232,6 +233,20 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
     }
 
+    @EventListener
+    @Async
+    public void handlePnLThreshold(PnLThresholdEvent event) {
+        log.info("[Telegram] P&L threshold event for {}: {}%",
+                event.getPositionId(),
+                String.format("%.2f", event.getThresholdPercent()));
+
+        String message = formatPnLThresholdMessage(event);
+
+        for (Long chatId : fundingContext.getSubscriberIds()) {
+            sendMessage(chatId, message);
+        }
+    }
+
     private void getTrades(Long chatId) {
         log.info("[Telegram] Got trades history request");
 
@@ -378,6 +393,20 @@ public class TelegramChatService extends TelegramLongPollingBot {
                 rate.getAction());
     }
 
+    private String formatPositionToCloseAlert(ArbitrageRates rate) {
+        return String.format("🚨 *High Arbitrage Alert* 🚨\n\n" +
+                        "*Symbol:* %s\n" +
+                        "*Max Arb:* %.2f%%\n" +
+                        "*Extended:* %.2f%%\n" +
+                        "*Aster:* %.2f%%\n" +
+                        "*Action:* %s",
+                rate.getSymbol(),
+                rate.getArbitrageRate(),
+                rate.getExtendedRate(),
+                rate.getAsterRate(),
+                rate.getAction());
+    }
+
     public String validateCurrentPnl(PositionPnLData pnlData) {
         if (pnlData == null) {
             return "Failed to calculate P&L";
@@ -413,5 +442,21 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     private String formatMoney(double amount) {
         return String.format("%+.4f USD", amount);
+    }
+
+    private String formatPnLThresholdMessage(PnLThresholdEvent event) {
+        PositionPnLData pnl = event.getPnlData();
+
+        return String.format(
+                "🤖 *FundingBot:* P&L Alert \uD83D\uDCB0\n\n" +
+                        "*Position:* `%s`\n" +
+                        "*Ticker:* %s\n" +
+                        "*ROI:* %.2f%%\n" +
+                        "*Net:* $%.2f",
+                event.getPositionId(),
+                event.getTicker(),
+                event.getThresholdPercent(),
+                pnl.getNetPnl()
+        );
     }
 }

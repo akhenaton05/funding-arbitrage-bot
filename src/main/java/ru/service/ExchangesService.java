@@ -23,6 +23,7 @@ import ru.dto.funding.HoldingMode;
 import ru.dto.funding.PositionNotionalData;
 import ru.dto.funding.PositionPnLData;
 import ru.event.NewArbitrageEvent;
+import ru.event.PnLThresholdEvent;
 import ru.exceptions.BalanceException;
 import ru.exceptions.ClosingPositionException;
 import ru.exceptions.OpeningPositionException;
@@ -56,6 +57,7 @@ public class ExchangesService {
     private final Map<String, FundingCloseSignal> openedPositions = new ConcurrentHashMap<>();
     private final Map<String, PositionBalance> balanceMap = new ConcurrentHashMap<>();
     private final Map<String, PositionPnLData> positionDataMap = new ConcurrentHashMap<>();
+    private final Set<String> notifiedPositions = ConcurrentHashMap.newKeySet();
     private final AtomicLong positionIdCounter = new AtomicLong(1);
 
     @EventListener
@@ -201,7 +203,7 @@ public class ExchangesService {
         log.info("[FundingBot] Aster funding prediction completed");
     }
 
-    @Scheduled(fixedDelay = 300000) //Every 5 mins
+    @Scheduled(fixedDelay = 300000) //Every 5 min
     public void updateOpenPositionsPnL() {
         if (openedPositions.isEmpty()) {
             return;
@@ -211,7 +213,14 @@ public class ExchangesService {
 
         for (FundingCloseSignal signal : openedPositions.values()) {
             try {
-                calculateCurrentPnL(signal);
+                PositionPnLData pnlData = calculateCurrentPnL(signal);
+
+                if (pnlData == null) {
+                    continue;
+                }
+
+                checkPnLThreshold(signal, pnlData);
+
             } catch (Exception e) {
                 log.error("[FundingBot] Failed to update P&L for {}: {}",
                         signal.getId(), e.getMessage());
@@ -222,15 +231,14 @@ public class ExchangesService {
     //Main logic
 
     public String openPosition(FundingOpenSignal signal) {
-        String positionId = generatePositionId();
         double marginBalance = validateBalance();
 
         //Validating data for opening position
-        if(!validateFundingTime(signal)) {
+        if (!validateFundingTime(signal)) {
             String errorMsg = "[FundingBot] More than an hour until funding, position not opened";
             log.info("[FundingBot] More than an hour until funding, position not opened");
 
-            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
+            publishFailureEvent("P-0000", signal, errorMsg, marginBalance, false);
             return errorMsg;
         }
 
@@ -238,10 +246,11 @@ public class ExchangesService {
             String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
 
-            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
+            publishFailureEvent("P-0000", signal, errorMsg, marginBalance, false);
             return errorMsg;
         }
 
+        String positionId = generatePositionId();
         double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
         HoldingMode mode = signal.getMode();
 
@@ -371,10 +380,39 @@ public class ExchangesService {
         openedPositions.put(positionToClose.getId(), positionToClose);
 
         //Funding validation for extended
-        updateExtendedFundingForPosition(positionToClose);
-        PositionPnLData extFunding = positionDataMap.get(positionId);
-        extFunding.setInitialExtFunding(extFunding.getExtendedFundingNet());
-        log.info("[FundingBot] Extended initial funding is {}", extFunding.getExtendedFundingNet());
+        PositionPnLData pnlData = positionDataMap.get(positionId);
+        if (pnlData != null) {
+            try {
+                ExtendedFundingHistoryResponse history = extendedClient.getFundingHistory(
+                        extSymbol,
+                        signal.getExtendedDirection().toString(),
+                        positionToClose.getOpenedAtMs(),
+                        1000
+                );
+
+                if (history != null && history.getSummary() != null) {
+                    double initialFunding = history.getSummary().getNetFunding();
+                    pnlData.setInitialExtFunding(initialFunding);
+                    pnlData.setExtendedFundingNet(0.0);
+                    pnlData.calculateTotals();
+
+                    log.info("[FundingBot] {} Extended funding baseline set at position open: ${} (will be subtracted from future readings)",
+                            positionId, String.format("%.4f", initialFunding));
+                } else {
+                    log.warn("[FundingBot] Failed to get Extended funding baseline for {}, will retry on next cycle",
+                            positionId);
+                    pnlData.setInitialExtFunding(0.0);
+                    pnlData.setExtendedFundingNet(0.0);
+                }
+            } catch (Exception e) {
+                log.error("[FundingBot] Error getting Extended funding baseline for {}: {}",
+                        positionId, e.getMessage());
+                pnlData.setInitialExtFunding(0.0);
+                pnlData.setExtendedFundingNet(0.0);
+            }
+        } else {
+            log.error("[FundingBot] P&L data not found for {} after validation!", positionId);
+        }
 
         String successMsg = "[FundingBot] Successfully opened positions | Extended: " + extendedOrderId +
                 " | Aster: " + asterOrderId + " | Mode: " + mode + ". Waiting for funding fees.";
@@ -471,6 +509,8 @@ public class ExchangesService {
                     currentSpread
             ));
 
+            notifiedPositions.remove(signal.getId());
+
             return String.format("[FundingBot] Positions closed. P&L: %.4f USD (%.2f%%)", profit, profitPercent);
 
         } catch (Exception e) {
@@ -509,7 +549,7 @@ public class ExchangesService {
         double extendedBalance = extendedClient.getBalance();
         if (extendedBalance == 0) throw new BalanceException("[Extended] Balance is 0");
 
-        //Adjusting balance for fees and price jumps
+        //Adjusting balance for fees and slippage while opening position
         double minBalance = Math.min(asterBalance, extendedBalance);
         double safeBalance = minBalance * 0.85; // 85% of balance
 
@@ -720,7 +760,7 @@ public class ExchangesService {
     }
 
     public int validateLeverage(String symbol) {
-        int asterLeverage = asterClient.getMaxLeverage(symbol + "USDT") ;
+        int asterLeverage = asterClient.getMaxLeverage(symbol + "USDT");
 
         log.info("[FundingBot] Aster leverage for {}: {}",
                 symbol, asterLeverage);
@@ -758,7 +798,7 @@ public class ExchangesService {
         log.info("[FundingBot] Manual close requested for position {}: {}",
                 positionId, signal.getTicker());
 
-        String result = closePositions(signal);
+        closePositions(signal);
 
         openedPositions.remove(positionId);
         log.info("[FundingBot] Position {} closed manually", positionId);
@@ -784,23 +824,31 @@ public class ExchangesService {
                 1000
         );
 
-        log.info("[FundingBot] Funding history: {}", history);
-
         if (history == null || history.getSummary() == null) {
             log.warn("[FundingBot] Failed to get Extended funding for {}", signal.getId());
             return;
         }
 
-        double netFunding = history.getSummary().getNetFunding() - pnlData.getInitialExtFunding();
-        log.info("[FundingBot] Current funding: {}", netFunding);
+        double currentTotal = history.getSummary().getNetFunding();
 
-        pnlData.setExtendedFundingNet(netFunding);
+        if (pnlData.getInitialExtFunding() == 0.0) {
+            pnlData.setInitialExtFunding(currentTotal);
+            pnlData.setExtendedFundingNet(0.0);
+
+            log.info("[FundingBot] {} Extended funding baseline initialized: ${}",
+                    signal.getId(), String.format("%.4f", currentTotal));
+        } else {
+            double netFunding = currentTotal - pnlData.getInitialExtFunding();
+            pnlData.setExtendedFundingNet(netFunding);
+
+            log.info("[FundingBot] {} Extended funding updated: baseline=${}, current=${}, net=${}",
+                    signal.getId(),
+                    String.format("%.4f", pnlData.getInitialExtFunding()),
+                    String.format("%.4f", currentTotal),
+                    String.format("%.4f", netFunding));
+        }
+
         pnlData.calculateTotals();
-
-        log.info("[FundingBot] {} Extended funding updated: net=${}, total_net=${}",
-                signal.getId(),
-                String.format("%.4f", netFunding),
-                String.format("%.4f", pnlData.getTotalFundingNet()));
     }
 
     private void addAsterFundingPrediction(FundingCloseSignal signal) {
@@ -1127,12 +1175,72 @@ public class ExchangesService {
                 : Double.parseDouble(position.getEntryPrice());
 
         double notional = size * price;
-        double fee =  notional * ASTER_TAKER_FEE;
+        double fee = notional * ASTER_TAKER_FEE;
 
         return new PositionNotionalData(notional, fee, price, size);
     }
 
     public PositionPnLData pnlPositionCalculator(String posId) {
         return calculateCurrentPnL(openedPositions.get(posId));
+    }
+
+    private void checkPnLThreshold(FundingCloseSignal signal, PositionPnLData pnlData) {
+        if (!fundingConfig.getPnl().isEnableNotifications()) {
+            return;
+        }
+
+        if (notifiedPositions.contains(signal.getId())) {
+            return;
+        }
+
+        //Grace period check
+        long positionAgeMinutes = TimeUnit.MILLISECONDS.toMinutes(
+                System.currentTimeMillis() - signal.getOpenedAtMs()
+        );
+
+        long gracePeriodMinutes = 10; // First 10 min - no notis
+
+        if (positionAgeMinutes < gracePeriodMinutes) {
+            log.debug("[FundingBot] {} P&L check skipped - grace period (age: {}min, grace: {}min)",
+                    signal.getId(), positionAgeMinutes, gracePeriodMinutes);
+            return;
+        }
+
+        double netPnl = pnlData.getNetPnl();
+        double marginUsed = signal.getBalance();
+
+        double profitPercent = (netPnl / marginUsed) * 100;
+
+        double thresholdPercent = fundingConfig.getPnl().getThresholdPercent();
+
+        //Checking threshold
+        if (profitPercent >= thresholdPercent) {
+            log.info("[FundingBot] 🎯 P&L Threshold reached for {}: {}% (threshold: {}%)",
+                    signal.getId(),
+                    String.format("%.2f", profitPercent),
+                    String.format("%.2f", thresholdPercent));
+
+            //Sending notis
+            String mode = signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode";
+
+            eventPublisher.publishEvent(new PnLThresholdEvent(
+                    signal.getId(),
+                    signal.getTicker(),
+                    pnlData,
+                    profitPercent,
+                    marginUsed,
+                    mode
+            ));
+
+            //Adding to notified
+            notifiedPositions.add(signal.getId());
+
+            log.info("[FundingBot] P&L threshold notification sent for {}", signal.getId());
+        } else {
+            log.debug("[FundingBot] {} P&L: {}% (threshold: {}% - not reached)",
+                    signal.getId(),
+                    String.format("%.2f", profitPercent),
+                    String.format("%.2f", thresholdPercent));
+        }
     }
 }

@@ -823,4 +823,158 @@ public class AsterClient implements ExchangeClient {
             return null;
         }
     }
+
+    public String openPositionWithSize(String symbol, double size, String direction) {
+        final String side;
+        final String positionSide;
+
+        if (direction.equalsIgnoreCase("LONG")) {
+            side = "BUY";
+            positionSide = "LONG";
+        } else if (direction.equalsIgnoreCase("SHORT")) {
+            side = "SELL";
+            positionSide = "SHORT";
+        } else {
+            log.error("[Aster] Invalid direction: {}", direction);
+            return null;
+        }
+
+        try {
+            log.info("[Aster] Opening position by size: symbol={}, size={}, direction={}",
+                    symbol, String.format("%.4f", size), direction);
+
+            // Validate size
+            if (size <= 0) {
+                log.error("[Aster] Invalid size: {}", size);
+                return null;
+            }
+
+            // Get filters
+            SymbolFilter filter = symbolFilters.get(symbol);
+            if (filter == null || filter.getStepSize() == null || filter.getStepSize().isEmpty()) {
+                log.warn("[Aster] Empty stepSize for {}, loading...", symbol);
+                loadSymbolFilters();
+                filter = symbolFilters.get(symbol);
+
+                if (filter == null) {
+                    log.error("[Aster] Failed to load filters for {}", symbol);
+                    return null;
+                }
+            }
+
+            double step;
+            try {
+                step = Double.parseDouble(filter.getStepSize());
+            } catch (NumberFormatException e) {
+                log.error("[Aster] Invalid stepSize '{}' for {}", filter.getStepSize(), symbol);
+                return null;
+            }
+
+            double minQty = 0.0;
+            if (filter.getMinQty() != null && !filter.getMinQty().isEmpty()) {
+                minQty = Double.parseDouble(filter.getMinQty());
+            }
+
+            double minNotional = 5.0;
+            if (filter.getMinNotional() != null && !filter.getMinNotional().isEmpty()) {
+                minNotional = Double.parseDouble(filter.getMinNotional());
+            }
+
+            // Round size to step
+            double qtyRounded = Math.floor(size / step) * step;
+
+            if (qtyRounded < minQty) {
+                if (size >= minQty) {
+                    qtyRounded = minQty;
+                    log.warn("[Aster] Adjusted size to minQty: {} → {}",
+                            String.format("%.4f", size),
+                            String.format("%.4f", qtyRounded));
+                } else {
+                    log.error("[Aster] Size {} < minQty {}",
+                            String.format("%.4f", size),
+                            String.format("%.4f", minQty));
+                    return null;
+                }
+            }
+
+            // Validate notional
+            double price = getMarkPrice(symbol);
+            if (price <= 0) {
+                log.error("[Aster] Failed to get mark price for {}", symbol);
+                return null;
+            }
+
+            double notional = qtyRounded * price;
+
+            if (notional < minNotional) {
+                log.error("[Aster] Notional ${} < minNotional ${}",
+                        String.format("%.2f", notional),
+                        String.format("%.2f", minNotional));
+                return null;
+            }
+
+            // Format quantity string
+            String quantityStr = String.format(Locale.US, "%." + getPrecision(step) + "f", qtyRounded);
+
+            log.info("[Aster] Position params: size={}, price=${}, notional=${}, step_size={}",
+                    quantityStr,
+                    String.format("%.6f", price),
+                    String.format("%.2f", notional),
+                    step);
+
+            // Open market order
+            String orderId = openMarketOrder(symbol, side, Double.parseDouble(quantityStr), positionSide);
+
+            if (orderId == null) {
+                log.error("[Aster] Failed to open market order");
+                return null;
+            }
+
+            log.info("[Aster] Position opened: orderId={}, size={} {}",
+                    orderId,
+                    quantityStr,
+                    symbol.replace("USDT", ""));
+
+            return orderId;
+
+        } catch (Exception e) {
+            log.error("[Aster] Error opening position by size for {}", symbol, e);
+            return null;
+        }
+    }
+
+    public Double calculateMaxSizeForMargin(String symbol, double marginUsd, int leverage, boolean isBuy) {
+        try {
+            double notional = marginUsd * leverage;
+
+            // Get execution price from book ticker
+            Double executionPrice = estimateExecutionPrice(symbol, notional / 1000.0, !isBuy);
+
+            if (executionPrice == null) {
+                // Fallback to mark price
+                executionPrice = getMarkPrice(symbol);
+                if (executionPrice <= 0) {
+                    log.error("[Aster] Failed to get price for {}", symbol);
+                    return null;
+                }
+                log.warn("[Aster] Using mark price as fallback: ${}",
+                        String.format("%.6f", executionPrice));
+            }
+
+            double maxSize = notional / executionPrice;
+
+            log.info("[Aster] Max size for margin ${} @ {}x: {} {} (price: ${})",
+                    String.format("%.2f", marginUsd),
+                    leverage,
+                    String.format("%.4f", maxSize),
+                    symbol.replace("USDT", ""),
+                    String.format("%.6f", executionPrice));
+
+            return maxSize;
+
+        } catch (Exception e) {
+            log.error("[Aster] Error calculating max size for {}", symbol, e);
+            return null;
+        }
+    }
 }

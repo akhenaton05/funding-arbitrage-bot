@@ -324,7 +324,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
             return String.format(
                     "🤖 *FundingBot:* Position Opening Failed ❌\n\n" +
-                            "*Position ID:* %s\n" +
+                            "*Position ID:* `%s`\n" +
                             "*Mode:* %s\n" +
                             "*Ticker:* %s\n" +
                             "*Error:* %s\n",
@@ -337,7 +337,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         return String.format(
                 "🤖 *FundingBot:* Position Opened ✅\n\n" +
-                        "*Position ID:* %s\n" +
+                        "*Position ID:* `%s`\n" +
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
                         "*Margin used:* %.2f USD\n" +
@@ -355,7 +355,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         if (!event.isSuccess()) {
             return String.format(
                     "🤖 *FundingBot:* Position Close Error ❌\n\n" +
-                            "*Position ID:* %s\n" +
+                            "*Position ID:* `%s`\n" +
                             "*Mode:* %s\n" +
                             "*Ticker:* %s\n" +
                             "*Status:* Manual check required!",
@@ -367,7 +367,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         return String.format(
                 "🤖 *FundingBot:* Position Closed ✅\n\n" +
-                        "*Position ID:* %s\n" +
+                        "*Position ID:* `%s`\n" +
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
                         "*P&L:* " + sign + "%.2f USD (%.2f%%)\n",
@@ -380,20 +380,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
     }
 
     private String formatAlert(ArbitrageRates rate) {
-        return String.format("🚨 *High Arbitrage Alert* 🚨\n\n" +
-                        "*Symbol:* %s\n" +
-                        "*Max Arb:* %.2f%%\n" +
-                        "*Extended:* %.2f%%\n" +
-                        "*Aster:* %.2f%%\n" +
-                        "*Action:* %s",
-                rate.getSymbol(),
-                rate.getArbitrageRate(),
-                rate.getExtendedRate(),
-                rate.getAsterRate(),
-                rate.getAction());
-    }
-
-    private String formatPositionToCloseAlert(ArbitrageRates rate) {
         return String.format("🚨 *High Arbitrage Alert* 🚨\n\n" +
                         "*Symbol:* %s\n" +
                         "*Max Arb:* %.2f%%\n" +
@@ -421,7 +407,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
         long heldMinutes = duration.toMinutesPart();
 
         StringBuilder sb = new StringBuilder();
-        sb.append("🤖 *FundingBot:* Position P&L: ").append(pnlData.getPositionId()).append("\n\n");
+        sb.append("🤖 *FundingBot:* Position P&L \uD83D\uDCCA \n\n");
+        sb.append("*Position ID:* ").append("`").append(pnlData.getPositionId()).append("`");
         sb.append("*Ticker:* ").append(pnlData.getTicker()).append("\n");
         sb.append("*Hold time:* ");
         if (heldHours > 0) {

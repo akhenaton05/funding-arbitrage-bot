@@ -854,4 +854,98 @@ public class ExtendedClient implements ExchangeClient {
             return null;
         }
     }
+
+    public String openPositionWithSize(String market, double size, String direction) {
+        String side = direction.equalsIgnoreCase("LONG") ? "BUY" : "SELL";
+
+        try {
+            log.info("[Extended] Opening position by size: market={}, size={}, direction={}",
+                    market, String.format("%.4f", size), direction);
+
+            // Validate size
+            if (size <= 0) {
+                log.error("[Extended] Invalid size: {}", size);
+                return null;
+            }
+
+            // Get step_size for rounding
+            double stepSize = getStepSize(market);
+            double roundedSize = roundToStepSize(size, stepSize);
+
+            if (roundedSize < size * 0.95) {
+                log.warn("[Extended] Size rounded down significantly: {} → {}",
+                        String.format("%.4f", size),
+                        String.format("%.4f", roundedSize));
+            }
+
+            // Get current price for logging
+            double price = getMarkPrice(market);
+            if (price <= 0) {
+                log.error("[Extended] Failed to get mark price for {}", market);
+                return null;
+            }
+
+            double notional = roundedSize * price;
+
+            log.info("[Extended] Position params: size={}, price=${}, notional=${}, step_size={}",
+                    String.format("%.4f", roundedSize),
+                    String.format("%.6f", price),
+                    String.format("%.2f", notional),
+                    stepSize);
+
+            // Open market position with exact size
+            String externalId = openMarketPosition(market, side, roundedSize, 2.0);
+
+            if (externalId == null) {
+                log.error("[Extended] Failed to open position with size {}", roundedSize);
+                return null;
+            }
+
+            log.info("[Extended] Position opened: external_id={}, size={} {}",
+                    externalId,
+                    String.format("%.4f", roundedSize),
+                    market.split("-")[0]);
+
+            return externalId;
+
+        } catch (Exception e) {
+            log.error("[Extended] Error opening position by size for {}", market, e);
+            return null;
+        }
+    }
+
+    public Double calculateMaxSizeForMargin(String market, double marginUsd, int leverage, boolean isBuy) {
+        try {
+            double notional = marginUsd * leverage;
+
+            // Get execution price from order book
+            Double executionPrice = estimateExecutionPrice(market, notional / 1000.0, !isBuy);
+
+            if (executionPrice == null) {
+                // Fallback to mark price
+                executionPrice = getMarkPrice(market);
+                if (executionPrice <= 0) {
+                    log.error("[Extended] Failed to get price for {}", market);
+                    return null;
+                }
+                log.warn("[Extended] Using mark price as fallback: ${}",
+                        String.format("%.6f", executionPrice));
+            }
+
+            double maxSize = notional / executionPrice;
+
+            log.info("[Extended] Max size for margin ${} @ {}x: {} {} (price: ${})",
+                    String.format("%.2f", marginUsd),
+                    leverage,
+                    String.format("%.4f", maxSize),
+                    market.split("-")[0],
+                    String.format("%.6f", executionPrice));
+
+            return maxSize;
+
+        } catch (Exception e) {
+            log.error("[Extended] Error calculating max size for {}", market, e);
+            return null;
+        }
+    }
 }

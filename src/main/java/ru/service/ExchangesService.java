@@ -1250,18 +1250,18 @@ public class ExchangesService {
         try {
             marginBalance = validateBalance();
         } catch (BalanceException e) {
-            String errorMsg = "[FundingBot] Balance validation failed: " + e.getMessage();
-            log.error(errorMsg);
-            String tempId = "FAIL-" + (System.currentTimeMillis() % 10000);
-            publishFailureEvent(tempId, signal, errorMsg, 0, false);
+            String errorMsg = "[FundingBot] No balance available to open position";
+            log.info("[FundingBot] No balance available to open position");
+
+            publishFailureEvent("P-0000", signal, errorMsg, 0, false);
             return errorMsg;
         }
 
         if (!validateFundingTime(signal)) {
             String errorMsg = "[FundingBot] More than an hour until funding, position not opened";
-            log.info(errorMsg);
-            String tempId = "FAIL-" + (System.currentTimeMillis() % 10000);
-            publishFailureEvent(tempId, signal, errorMsg, marginBalance, false);
+            log.info("[FundingBot] More than an hour until funding, position not opened");
+
+            publishFailureEvent("P-0000", signal, errorMsg, marginBalance, false);
             return errorMsg;
         }
 

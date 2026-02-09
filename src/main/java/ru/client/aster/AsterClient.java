@@ -597,13 +597,26 @@ public class AsterClient implements ExchangeClient {
             String response = executeSignedRequest("GET", "/fapi/v1/leverageBracket", queryParams);
 
             if (response == null || response.isEmpty()) {
-                log.warn("[Aster] Empty response for leverage info, using default mode parameter or 10");
+                log.warn("[Aster] Empty response for leverage info, using default 10");
                 return 10;
             }
 
             log.debug("[Aster] Leverage response: {}", response);
 
-            Map<String, Object> data = objectMapper.readValue(response, Map.class);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> responseList = objectMapper.readValue(
+                    response,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, Map.class)
+            );
+
+            if (responseList == null || responseList.isEmpty()) {
+                log.warn("[Aster] Empty leverage brackets list for {}, using default 10", symbol);
+                return 10;
+            }
+
+            Map<String, Object> data = responseList.getFirst();
+
+            @SuppressWarnings("unchecked")
             List<Map<String, Object>> brackets = (List<Map<String, Object>>) data.get("brackets");
 
             if (brackets != null && !brackets.isEmpty()) {
@@ -614,11 +627,11 @@ public class AsterClient implements ExchangeClient {
                 return maxLeverage;
             }
 
-            log.warn("[Aster] No brackets found for {}, using using default mode parameter or 10", symbol);
+            log.warn("[Aster] No brackets found for {}, using default 10", symbol);
             return 10;
 
         } catch (Exception e) {
-            log.error("[Aster] Failed to get max leverage for {}, using default mode parameter or 10", symbol, e);
+            log.error("[Aster] Failed to get max leverage for {}, using default 10", symbol, e);
             return 10;
         }
     }

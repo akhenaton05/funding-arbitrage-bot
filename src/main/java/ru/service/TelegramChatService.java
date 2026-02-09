@@ -408,7 +408,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         StringBuilder sb = new StringBuilder();
         sb.append("🤖 *FundingBot:* Position P&L \uD83D\uDCCA \n\n");
-        sb.append("*Position ID:* ").append("`").append(pnlData.getPositionId()).append("`");
+        sb.append("*Position ID:* ").append("`").append(pnlData.getPositionId()).append("`").append("\n");
         sb.append("*Ticker:* ").append(pnlData.getTicker()).append("\n");
         sb.append("*Hold time:* ");
         if (heldHours > 0) {

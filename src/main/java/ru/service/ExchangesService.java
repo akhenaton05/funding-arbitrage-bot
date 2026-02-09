@@ -65,7 +65,7 @@ public class ExchangesService {
     public void handleArbitrageSignal(NewArbitrageEvent event) {
         log.info("[FundingBot] Received arbitrage signal for {}", event.getSignal().getTicker());
 
-        String result = openPosition(event.getSignal());
+        String result = openPositionWithEqualSize(event.getSignal());
 
         log.info("[FundingBot] Result: {}", result);
     }
@@ -1242,5 +1242,388 @@ public class ExchangesService {
                     String.format("%.2f", profitPercent),
                     String.format("%.2f", thresholdPercent));
         }
+    }
+
+    public String openPositionWithEqualSize(FundingOpenSignal signal) {
+        double marginBalance;
+
+        try {
+            marginBalance = validateBalance();
+        } catch (BalanceException e) {
+            String errorMsg = "[FundingBot] No balance available to open position";
+            log.info("[FundingBot] No balance available to open position");
+
+            publishFailureEvent("P-0000", signal, errorMsg, 0, false);
+            return errorMsg;
+        }
+
+        if (!validateFundingTime(signal)) {
+            String errorMsg = "[FundingBot] More than an hour until funding, position not opened";
+            log.info("[FundingBot] More than an hour until funding, position not opened");
+
+            publishFailureEvent("P-0000", signal, errorMsg, marginBalance, false);
+            return errorMsg;
+        }
+
+        if (marginBalance <= 10) {
+            String errorMsg = "[FundingBot] Insufficient balance: $" + String.format("%.2f", marginBalance);
+            log.info("[FundingBot] Insufficient balance: ${}", marginBalance);
+            String tempId = "FAIL-" + (System.currentTimeMillis() % 10000);
+            publishFailureEvent(tempId, signal, errorMsg, marginBalance, false);
+            return errorMsg;
+        }
+
+        String positionId = generatePositionId();
+        log.info("[FundingBot] Validations passed. Allocated position ID: {} for {}",
+                positionId, signal.getTicker());
+
+        double balanceBefore = asterClient.getBalance() + extendedClient.getBalance();
+        HoldingMode mode = signal.getMode();
+
+        PositionBalance positionBalance = new PositionBalance();
+        positionBalance.setBalanceBefore(balanceBefore);
+
+        int leverage = Math.min(signal.getLeverage(), validateLeverage(signal.getTicker()));
+
+        balanceMap.put(positionId, positionBalance);
+
+        String ticker = signal.getTicker();
+        String extSymbol = ticker + "-USD";
+        String astSymbol = ticker + "USDT";
+
+        log.info("[FundingBot] Calculating delta-neutral position size");
+
+        //Choosing direction for execution price
+        boolean isExtBuy = signal.getExtendedDirection() == Direction.LONG;
+        boolean isAstBuy = signal.getAsterDirection() == Direction.LONG;
+
+        //Calculating max sizes for both exchanges
+        Double extMaxSize = extendedClient.calculateMaxSizeForMargin(
+                extSymbol,
+                marginBalance,
+                leverage,
+                isExtBuy
+        );
+
+        Double astMaxSize = asterClient.calculateMaxSizeForMargin(
+                astSymbol,
+                marginBalance,
+                leverage,
+                isAstBuy
+        );
+
+        if (extMaxSize == null || astMaxSize == null) {
+            String errorMsg = "[FundingBot] Failed to calculate position sizes";
+            log.error(errorMsg);
+            balanceMap.remove(positionId);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
+            rollbackPositionId();
+            return errorMsg;
+        }
+
+        //Using minimal size
+        double targetSize = Math.min(extMaxSize, astMaxSize);
+
+        //Rounding
+        targetSize = Math.floor(targetSize * 100) / 100.0;
+
+        log.info("[FundingBot] Delta-neutral sizing: Extended max: {} ," +
+                " Aster max: {}, Target: {}, (using minimum)",
+                String.format("%.4f", extMaxSize), String.format("%.4f", astMaxSize), String.format("%.4f", targetSize));
+
+        String extendedOrderId;
+        String asterOrderId;
+
+        // Extended position
+        try {
+            log.info("[Extended] Opening {} {} @ {} with size {}",
+                    signal.getExtendedDirection(),
+                    ticker,
+                    leverage + "x",
+                    String.format("%.4f", targetSize));
+
+            // Set leverage first
+            extendedClient.setLeverage(extSymbol, leverage);
+
+            // Open by size
+            extendedOrderId = extendedClient.openPositionWithSize(
+                    extSymbol,
+                    targetSize,
+                    signal.getExtendedDirection().toString()
+            );
+
+            if (extendedOrderId == null) {
+                throw new OpeningPositionException("[Extended] Failed to open position - returned null");
+            }
+
+            log.info("[Extended] Position opened: external_id={}", extendedOrderId);
+
+        } catch (Exception e) {
+            String errorMsg = "[Extended] Error creating position: " + e.getMessage();
+            log.error(errorMsg, e);
+
+            balanceMap.remove(positionId);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
+            rollbackPositionId();
+            log.warn("[FundingBot] Position ID {} rolled back due to Extended failure", positionId);
+
+            return errorMsg;
+        }
+
+        // Aster position
+        try {
+            log.info("[Aster] Opening {} {} @ {} with size {}",
+                    signal.getAsterDirection(),
+                    ticker,
+                    leverage + "x",
+                    String.format("%.4f", targetSize));
+
+            // Set leverage first
+            asterClient.setLeverage(astSymbol, leverage);
+
+            // Open by same size
+            asterOrderId = asterClient.openPositionWithSize(
+                    astSymbol,
+                    targetSize,
+                    signal.getAsterDirection().toString()
+            );
+
+            if (asterOrderId == null) {
+                throw new OpeningPositionException("[Aster] Failed to open position - returned null");
+            }
+
+            log.info("[Aster] Position opened: orderId={}", asterOrderId);
+
+        } catch (Exception e) {
+            log.error("[Aster] Failed to open position, rolling back Extended...", e);
+
+            // Rollback Extended
+            try {
+                extendedClient.closePosition(extSymbol, signal.getExtendedDirection().toString());
+                log.info("[Extended] Position closed (rollback)");
+            } catch (Exception closeEx) {
+                log.error("[Extended] Failed to close position during rollback! Close manually!", closeEx);
+            }
+
+            double balanceAfter = asterClient.getBalance() + extendedClient.getBalance();
+            double balanceLoss = balanceBefore - balanceAfter;
+
+            String errorMsg = "[Aster] Error creating position: " + e.getMessage() +
+                    "\n[FundingBot] Failed opening Aster position, loss = $" + String.format("%.4f", balanceLoss);
+
+            balanceMap.remove(positionId);
+            publishFailureEvent(positionId, signal, errorMsg, balanceLoss, false);
+            rollbackPositionId();
+            log.warn("[FundingBot] Position ID {} rolled back due to Aster failure", positionId);
+
+            return errorMsg;
+        }
+
+        // Waiting for positions to be visible
+        try {
+            Thread.sleep(4000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("[FundingBot] Interrupted during sleep", e);
+        }
+
+        // Validate positions
+        try {
+            if (!validateOpenedPositions(extSymbol, astSymbol, signal, positionId)) {
+                log.error("[FundingBot] Position validation failed - positions were closed");
+
+                double balanceAfter = asterClient.getBalance() + extendedClient.getBalance();
+                double balanceLoss = balanceBefore - balanceAfter;
+
+                String errorMsg = "[FundingBot] Position validation failed - all positions closed with delta $" +
+                        String.format("%.4f", balanceLoss);
+
+                balanceMap.remove(positionId);
+                positionDataMap.remove(positionId);
+                publishFailureEvent(positionId, signal, errorMsg, balanceLoss, false);
+                rollbackPositionId();
+                log.warn("[FundingBot] Position ID {} rolled back due to validation failure", positionId);
+
+                return errorMsg;
+            }
+        } catch (ClosingPositionException e) {
+            log.error("[FundingBot] Failed to close positions during validation! Manual check required!", e);
+
+            String errorMsg = "[FundingBot] Failed to close positions during validation! Manual check required!\n"
+                    + e.getMessage();
+
+            balanceMap.remove(positionId);
+            positionDataMap.remove(positionId);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
+            rollbackPositionId();
+            log.warn("[FundingBot] Position ID {} rolled back due to closing exception", positionId);
+
+            return errorMsg;
+        }
+
+        // Verify delta-neutrality
+        verifyDeltaNeutrality(extSymbol, astSymbol, signal, positionId, targetSize);
+
+        FundingCloseSignal positionToClose = FundingCloseSignal.builder()
+                .id(positionId)
+                .ticker(signal.getTicker())
+                .balance(marginBalance)
+                .extDirection(signal.getExtendedDirection())
+                .astDirection(signal.getAsterDirection())
+                .asterOrderId(asterOrderId)
+                .extendedOrderId(extendedOrderId)
+                .openedFundingRate(signal.getRate())
+                .action(signal.getAction())
+                .mode(mode)
+                .openedAtMs(System.currentTimeMillis())
+                .openSpread(0.0)
+                .badStreak(0)
+                .build();
+
+        openedPositions.put(positionToClose.getId(), positionToClose);
+
+        // Extended funding baseline
+        PositionPnLData pnlData = positionDataMap.get(positionId);
+        if (pnlData != null) {
+            try {
+                ExtendedFundingHistoryResponse history = extendedClient.getFundingHistory(
+                        extSymbol,
+                        signal.getExtendedDirection().toString(),
+                        positionToClose.getOpenedAtMs(),
+                        1000
+                );
+
+                if (history != null && history.getSummary() != null) {
+                    double initialFunding = history.getSummary().getNetFunding();
+                    pnlData.setInitialExtFunding(initialFunding);
+                    pnlData.setExtendedFundingNet(0.0);
+                    pnlData.calculateTotals();
+
+                    log.info("[FundingBot] {} Extended funding baseline set: ${}",
+                            positionId, String.format("%.4f", initialFunding));
+                } else {
+                    log.warn("[FundingBot] Failed to get Extended funding baseline for {}", positionId);
+                    pnlData.setInitialExtFunding(0.0);
+                    pnlData.setExtendedFundingNet(0.0);
+                }
+            } catch (Exception e) {
+                log.error("[FundingBot] Error getting Extended funding baseline for {}: {}",
+                        positionId, e.getMessage());
+                pnlData.setInitialExtFunding(0.0);
+                pnlData.setExtendedFundingNet(0.0);
+            }
+        } else {
+            log.error("[FundingBot] P&L data not found for {} after validation!", positionId);
+        }
+
+        String successMsg = "[FundingBot] ✓ DELTA-NEUTRAL position opened | " +
+                "Extended: " + extendedOrderId + " | " +
+                "Aster: " + asterOrderId + " | " +
+                "Size: " + String.format("%.4f", targetSize) + " " + ticker + " | " +
+                "Mode: " + mode;
+
+        eventPublisher.publishEvent(new PositionOpenedEvent(
+                positionId,
+                signal.getTicker(),
+                successMsg,
+                marginBalance,
+                signal.getExtendedDirection().toString(),
+                signal.getAsterDirection().toString(),
+                mode.equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
+                true,
+                signal.getRate()
+        ));
+
+        log.info(successMsg);
+        return successMsg;
+    }
+
+    //Logging delta neutrality for open orders
+    private void verifyDeltaNeutrality(String extSymbol, String astSymbol,
+                                       FundingOpenSignal signal, String positionId,
+                                       double expectedSize) {
+        try {
+            log.info("[FundingBot] Verifying delta-neutrality for {}", positionId);
+
+            // Get actual positions
+            List<ExtendedPosition> extPositions = extendedClient.getPositions(
+                    extSymbol,
+                    signal.getExtendedDirection().toString()
+            );
+
+            List<AsterPosition> asterPositions = asterClient.getPositions(astSymbol);
+
+            if (extPositions == null || extPositions.isEmpty() ||
+                    asterPositions == null || asterPositions.isEmpty()) {
+                log.warn("[FundingBot] Cannot verify delta - positions not found yet");
+                return;
+            }
+
+            ExtendedPosition extPos = extPositions.getFirst();
+            double extSize = Double.parseDouble(extPos.getSize());
+            double extPrice = Double.parseDouble(extPos.getOpenPrice());
+            double extNotional = extSize * extPrice;
+
+            AsterPosition astPos = null;
+            for (AsterPosition pos : asterPositions) {
+                if (pos.getPositionSide().equalsIgnoreCase(signal.getAsterDirection().toString())) {
+                    astPos = pos;
+                    break;
+                }
+            }
+
+            if (astPos == null) {
+                log.warn("[FundingBot] Aster position not found for delta verification");
+                return;
+            }
+
+            double astSize = Math.abs(Double.parseDouble(astPos.getPositionAmt()));
+            double astPrice = Double.parseDouble(astPos.getEntryPrice());
+            double astNotional = astSize * astPrice;
+
+            // Calculate delta
+            double sizeDelta = Math.abs(extSize - astSize);
+            double sizeDeltaPercent = (sizeDelta / expectedSize) * 100;
+
+            double notionalDiff = Math.abs(extNotional - astNotional);
+            double notionalDiffPercent = (notionalDiff / extNotional) * 100;
+
+            log.info("[FundingBot] Delta-Neutral Verification");
+            log.info("Extended: {} {} @ ${} = ${} notional",
+                    String.format("%.4f", extSize),
+                    signal.getTicker(),
+                    String.format("%.6f", extPrice),
+                    String.format("%.2f", extNotional));
+            log.info("Aster: {} {} @ ${} = ${} notional",
+                    String.format("%.4f", astSize),
+                    signal.getTicker(),
+                    String.format("%.6f", astPrice),
+                    String.format("%.2f", astNotional));
+            log.info("Size delta: {} {} ({}%)",
+                    String.format("%.4f", sizeDelta),
+                    signal.getTicker(),
+                    String.format("%.2f", sizeDeltaPercent));
+            log.info("Notional diff: ${} ({}%)",
+                    String.format("%.2f", notionalDiff),
+                    String.format("%.2f", notionalDiffPercent));
+
+            if (sizeDeltaPercent < 1.0) {
+                log.info("Great delta-neutrality (<1% difference)");
+            } else if (sizeDeltaPercent < 5.0) {
+                log.info("Good delta-neutrality (<5% difference)");
+            } else if (sizeDeltaPercent < 10.0) {
+                log.warn("Acceptable delta-neutrality (5-10% difference)");
+            } else {
+                log.warn("Bad delta-neutrality (>10% difference) - check prices!");
+            }
+
+        } catch (Exception e) {
+            log.error("[FundingBot] Error verifying delta-neutrality", e);
+        }
+    }
+
+    private void rollbackPositionId() {
+        long rolledBack = positionIdCounter.decrementAndGet();
+        log.debug("[FundingBot] Position ID counter rolled back to: {}", rolledBack);
     }
 }

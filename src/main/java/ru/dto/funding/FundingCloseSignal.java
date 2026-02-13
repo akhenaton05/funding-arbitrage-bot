@@ -1,8 +1,10 @@
-package ru.dto.exchanges;
+package ru.dto.funding;
 
 import lombok.Builder;
 import lombok.Data;
-import ru.dto.funding.HoldingMode;
+import ru.dto.exchanges.Direction;
+import ru.dto.exchanges.ExchangePosition;
+import ru.exchanges.Exchange;
 
 @Data
 @Builder
@@ -10,10 +12,10 @@ public class FundingCloseSignal {
     private String id;
     private String ticker;
     private double balance;
-    private Direction extDirection;
-    private Direction astDirection;
-    private String asterOrderId;
-    private String extendedOrderId;
+    private ExchangePosition firstPosition;
+    private ExchangePosition secondPosition;
+    private Exchange firstExchange;
+    private Exchange secondExchange;
     private double openedFundingRate;
     private double currentFindingRate;
     //Smart Mode

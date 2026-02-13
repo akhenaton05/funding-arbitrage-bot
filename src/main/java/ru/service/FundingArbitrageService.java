@@ -11,7 +11,9 @@ import org.springframework.stereotype.Service;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import ru.config.FundingConfig;
 import ru.dto.exchanges.Direction;
-import ru.dto.exchanges.FundingOpenSignal;
+import ru.dto.exchanges.ExchangePosition;
+import ru.dto.exchanges.ExchangeType;
+import ru.dto.funding.FundingOpenSignal;
 import ru.dto.funding.ArbitrageRates;
 import ru.dto.funding.HoldingMode;
 import ru.event.FundingAlertEvent;
@@ -32,6 +34,11 @@ public class FundingArbitrageService {
     private final ApplicationEventPublisher eventPublisher;
     private final FundingConfig fundingConfig;
     private static final String API_URL = "https://api.loris.tools/funding";
+
+    private static final Set<String> SUPPORTED_EXCHANGES = Set.of(
+            "extended",
+            "aster"
+    );
 
     public FundingArbitrageService(CloseableHttpClient httpClient,
                                    FundingArbitrageContext fundingContext,
@@ -56,45 +63,128 @@ public class FundingArbitrageService {
     public List<ArbitrageRates> calculateArbitrageRates() {
         Map<String, Map<String, Object>> fundingRates = getFundingRates();
 
-        Map<String, Object> extended = fundingRates.get("extended");
-        Map<String, Object> aster = fundingRates.get("aster");
+        Map<String, Map<String, Object>> filteredRates = new HashMap<>();
 
-        if (Objects.isNull(extended) || Objects.isNull(aster)) {
-            log.error("Required exchanges not found");
+        for (Map.Entry<String, Map<String, Object>> entry : fundingRates.entrySet()) {
+            String exchangeName = entry.getKey().toLowerCase();
+
+            if (SUPPORTED_EXCHANGES.contains(exchangeName)) {
+                filteredRates.put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        log.info("[FundingBot] Filtered {} supported exchanges from {} total",
+                filteredRates.size(), fundingRates.size());
+
+        if (filteredRates.size() < 2) {
+            log.warn("[FundingBot] Not enough supported exchanges for arbitrage: {}",
+                    filteredRates.keySet());
             return Collections.emptyList();
         }
 
         List<ArbitrageRates> arbitrageRates = new ArrayList<>();
+        List<String> exchanges = new ArrayList<>(filteredRates.keySet());
 
-        for (Map.Entry<String, Object> entry : extended.entrySet()) {
-            String symbol = entry.getKey();
+        for (int i = 0; i < exchanges.size(); i++) {
+            for (int j = i + 1; j < exchanges.size(); j++) {
+                String ex1Name = exchanges.get(i);
+                String ex2Name = exchanges.get(j);
 
-            if (aster.containsKey(symbol)) {
-                double extendedRate = ((Number) entry.getValue()).doubleValue();
-                double asterRate = ((Number) aster.get(symbol)).doubleValue();
-                double arbitrage = Math.abs(extendedRate - asterRate);
+                Map<String, Object> ex1Rates = filteredRates.get(ex1Name);
+                Map<String, Object> ex2Rates = filteredRates.get(ex2Name);
 
-                String action = extendedRate < asterRate ?
-                        "BUY extended, SELL aster" :
-                        "SELL extended, BUY aster";
-
-                arbitrageRates.add(ArbitrageRates.builder()
-                        .symbol(symbol)
-                        .arbitrageRate(arbitrage)
-                        .extendedRate(extendedRate)
-                        .asterRate(asterRate)
-                        .action(action)
-                        .build());
+                arbitrageRates.addAll(
+                        findArbitrageOpportunities(ex1Name, ex1Rates, ex2Name, ex2Rates)
+                );
             }
         }
 
-        //Sorting
+        // Sort by arbitrage rate
         arbitrageRates.sort(Comparator.comparingDouble(ArbitrageRates::getArbitrageRate).reversed());
 
         return arbitrageRates;
     }
 
-    @Scheduled(cron = "0 55 * * * *")
+    /**
+     * Find arbitrage opportunities between two exchanges
+     */
+    private List<ArbitrageRates> findArbitrageOpportunities(
+            String ex1Name,
+            Map<String, Object> ex1Rates,
+            String ex2Name,
+            Map<String, Object> ex2Rates) {
+
+        List<ArbitrageRates> opportunities = new ArrayList<>();
+
+        ExchangeType ex1Type = parseExchangeType(ex1Name);
+        ExchangeType ex2Type = parseExchangeType(ex2Name);
+
+        if (ex1Type == null || ex2Type == null) {
+            log.error("[FundingBot] Failed to parse supported exchange: {} or {}",
+                    ex1Name, ex2Name);
+            return opportunities;
+        }
+
+        // Find common symbols
+        for (Map.Entry<String, Object> entry : ex1Rates.entrySet()) {
+            String symbol = entry.getKey();
+
+            if (ex2Rates.containsKey(symbol)) {
+                double ex1Rate = ((Number) entry.getValue()).doubleValue();
+                double ex2Rate = ((Number) ex2Rates.get(symbol)).doubleValue();
+
+                double arbitrage = Math.abs(ex1Rate - ex2Rate);
+
+                String action = buildActionDescription(
+                        ex1Name, ex1Rate, ex1Type,
+                        ex2Name, ex2Rate, ex2Type
+                );
+
+                opportunities.add(ArbitrageRates.builder()
+                        .symbol(symbol)
+                        .arbitrageRate(arbitrage)
+                        .firstExchange(ex1Type)
+                        .secondExchange(ex2Type)
+                        .firstRate(ex1Rate)
+                        .secondRate(ex2Rate)
+                        .action(action)
+                        .build());
+            }
+        }
+
+        return opportunities;
+    }
+
+    /**
+     * Parse exchange name to ExchangeType (only for whitelisted exchanges)
+     */
+    private ExchangeType parseExchangeType(String exchangeName) {
+        if (exchangeName == null) {
+            return null;
+        }
+
+        String normalized = exchangeName.toLowerCase();
+
+        return switch (normalized) {
+            case "extended" -> ExchangeType.EXTENDED;
+            case "aster" -> ExchangeType.ASTER;
+            default -> null;
+        };
+    }
+
+    private String buildActionDescription(
+            String ex1Name, double ex1Rate, ExchangeType ex1Type,
+            String ex2Name, double ex2Rate, ExchangeType ex2Type) {
+
+        // Lower rate → LONG, Higher rate → SHORT
+        if (ex1Rate < ex2Rate) {
+            return String.format("LONG %s, SHORT %s", ex1Name, ex2Name);
+        } else {
+            return String.format("SHORT %s, LONG %s", ex1Name, ex2Name);
+        }
+    }
+
+    @Scheduled(cron = "0 54 * * * *")
     private void fundingTracker() {
         try {
             List<ArbitrageRates> arbitrageRates = calculateArbitrageRates();
@@ -153,19 +243,35 @@ public class FundingArbitrageService {
         }
     }
 
-    private FundingOpenSignal convertToSignal(ArbitrageRates rates, HoldingMode mode, Integer leverage, double rate) {
-        boolean sellExtended = rates.getAction().startsWith("SELL extended");
+    private FundingOpenSignal convertToSignal(
+            ArbitrageRates rates,
+            HoldingMode mode,
+            Integer leverage,
+            double rate) {
 
-        FundingOpenSignal signal = new FundingOpenSignal();
-        signal.setTicker(rates.getSymbol());
-        signal.setExtendedDirection(sellExtended ? Direction.SHORT : Direction.LONG);
-        signal.setAsterDirection(sellExtended ? Direction.LONG : Direction.SHORT);
-        signal.setAction(rates.getAction());
-        signal.setMode(mode);
-        signal.setLeverage(leverage);
-        signal.setRate(rate);
+        Direction firstDir = rates.getFirstDirection();
+        Direction secondDir = rates.getSecondDirection();
 
-        return signal;
+        //Create positions from ArbitrageRates data
+        ExchangePosition first = ExchangePosition.builder()
+                .exchange(rates.getFirstExchange())
+                .direction(firstDir)
+                .build();
+
+        ExchangePosition second = ExchangePosition.builder()
+                .exchange(rates.getSecondExchange())
+                .direction(secondDir)
+                .build();
+
+        return FundingOpenSignal.builder()
+                .ticker(rates.getSymbol())
+                .firstPosition(first)
+                .secondPosition(second)
+                .action(rates.getAction())
+                .mode(mode)
+                .leverage(leverage)
+                .rate(rate)
+                .build();
     }
 
     private Map<String, Map<String, Object>> executeRequest(HttpGet httpGet) throws Exception {

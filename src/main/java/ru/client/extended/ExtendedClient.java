@@ -7,6 +7,8 @@ import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 import ru.client.ExchangeClient;
+import ru.dto.exchanges.ExchangeType;
+import ru.dto.exchanges.OrderResult;
 import ru.dto.exchanges.extended.*;
 
 import java.net.URI;
@@ -271,7 +273,7 @@ public class ExtendedClient implements ExchangeClient {
     }
 
 
-    public String closePosition(String market, String currentSide) {
+    public OrderResult closePosition(String market, String currentSide) {
         String endpoint = baseUrl + "/positions/close";
 
         Map<String, Object> body = new HashMap<>();
@@ -316,11 +318,23 @@ public class ExtendedClient implements ExchangeClient {
 
             log.info("[Extended] Position closing: external_id={}, close_side={}",
                     orderResponse.getExternalId(), orderResponse.getCloseSide());
-            return orderResponse.getExternalId();
+            return OrderResult.builder()
+                    .exchange(ExchangeType.EXTENDED)
+                    .symbol(market)
+                    .success(true)
+                    .orderId(orderResponse.getExternalId())
+                    .message("Position closed")
+                    .build();
 
         } catch (Exception e) {
             log.error("[Extended] Exception closing position", e);
-            return null;
+            return OrderResult.builder()
+                    .exchange(ExchangeType.EXTENDED)
+                    .symbol(market)
+                    .success(false)
+                    .message(e.getMessage())
+                    .errorCode(e.getClass().getSimpleName())
+                    .build();
         }
     }
 

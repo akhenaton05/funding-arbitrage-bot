@@ -12,6 +12,8 @@ public class AsterPosition {
     private String positionAmt;
     @JsonProperty("entryPrice")
     private String entryPrice;
+    @JsonProperty("markPrice")
+    private String markPrice;
     @JsonProperty("unRealizedProfit")
     private String unrealizedProfit;
 }

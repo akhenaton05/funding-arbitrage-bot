@@ -819,12 +819,20 @@ def get_funding_history():
         )
 
         if status == 200 and isinstance(data, dict) and data.get("data"):
-            # Дополнительно рассчитываем summary
             payments = data.get("data", [])
+
+            #ФИЛЬТРУЕМ платежи по paidTime >= fromTime
+            from_time_ms = int(from_time) if from_time else 0
+            filtered_payments = [
+                p for p in payments
+                if p.get("paidTime", 0) >= from_time_ms
+            ]
+
             total_received = 0.0
             total_paid = 0.0
 
-            for payment in payments:
+            #Считаем только отфильтрованные платежи
+            for payment in filtered_payments:
                 fee = float(payment.get("fundingFee", 0))
                 if fee > 0:
                     total_received += fee
@@ -836,17 +844,19 @@ def get_funding_history():
                 "total_received": total_received,
                 "total_paid": total_paid,
                 "net_funding": total_received - total_paid,
-                "payments_count": len(payments)
+                "payments_count": len(filtered_payments)
             }
 
-            logger.info("Funding summary: received=%.4f paid=%.4f net=%.4f count=%d",
-                       total_received, total_paid, total_received - total_paid, len(payments))
+            logger.info("Extended funding history: total=%d filtered=%d received=%.4f paid=%.4f net=%.4f",
+                       len(payments), len(filtered_payments),
+                       total_received, total_paid, total_received - total_paid)
 
         return jsonify(data), status
 
     except Exception as e:
         logger.exception("get_funding_history failed")
         return jsonify({"status": "ERROR", "message": str(e)}), 500
+
 
 @app.route("/api/v1/info/markets/<market>/orderbook", methods=["GET"])
 def get_order_book(market: str):

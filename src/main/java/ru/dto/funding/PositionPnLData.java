@@ -11,22 +11,21 @@ public class PositionPnLData {
     private String positionId;
     private String ticker;
     private LocalDateTime openTime;
-    private double astOpenPrice;
-    private double extOpenPrice;
+    private double firstOpenPrice;
+    private double secondOpenPrice;
     private double totalOpenFees;
     private double totalCloseFees;
-    private double initialExtFunding;
-    private double extendedFundingNet;
-    private double asterFundingNet;
-    private double extUnrealizedPnl;
-    private double asterUnrealizedPnl;
+    private double firstFundingNet;
+    private double secondFundingNet;
+    private double firstUnrealizedPnl;
+    private double secondUnrealizedPnl;
     private double totalFundingNet;
     private double grossPnl;
     private double netPnl;
 
     public void calculateTotals() {
-        this.totalFundingNet = extendedFundingNet + asterFundingNet;
-        this.grossPnl = extUnrealizedPnl + asterUnrealizedPnl;
+        this.totalFundingNet = firstFundingNet + secondFundingNet;
+        this.grossPnl = secondUnrealizedPnl + firstUnrealizedPnl;
         this.netPnl = grossPnl - totalOpenFees - totalCloseFees + totalFundingNet;
     }
 }

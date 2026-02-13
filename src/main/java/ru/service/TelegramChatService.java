@@ -13,7 +13,7 @@ import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.*;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import ru.config.*;
-import ru.dto.exchanges.FundingCloseSignal;
+import ru.dto.funding.FundingCloseSignal;
 import ru.dto.exchanges.PositionBalance;
 import ru.dto.exchanges.PositionClosedEvent;
 import ru.dto.exchanges.PositionOpenedEvent;
@@ -29,7 +29,6 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -87,6 +86,36 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
     }
 
+//    private void sendRates(Long chatId) {
+//        log.info("Request to get funding rates received");
+//        sendTypingAction(chatId);
+//
+//        try {
+//            List<ArbitrageRates> rates = fundingService.calculateArbitrageRates();
+//
+//            StringBuilder result = new StringBuilder();
+//            result.append("```\n");
+//            result.append(String.format("%-7s | %-7s | %-8s | %-8s\n",
+//                    "Ticker", "Max Arb",  rates.getFirst().getFirstExchange().getDisplayName(), rates.getFirst().getSecondExchange().getDisplayName()));
+//            result.append("-".repeat(40)).append("\n");
+//
+//            rates.stream()
+//                    .limit(10)
+//                    .forEach(opp -> result.append(String.format("%-7s | %6.1f%% | %7.1f%% | %9.1f%%\n",
+//                            opp.getSymbol(),
+//                            opp.getArbitrageRate(),
+//                            opp.getFirstRate(),
+//                            opp.getSecondRate())));
+//
+//            result.append("```");
+//
+//            sendMessage(chatId, result.toString());
+//        } catch (Exception e) {
+//            sendMessage(chatId, " Error getting data");
+//            log.error("Error sending rates", e);
+//        }
+//    }
+
     private void sendRates(Long chatId) {
         log.info("Request to get funding rates received");
         sendTypingAction(chatId);
@@ -96,30 +125,34 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
             StringBuilder result = new StringBuilder();
             result.append("```\n");
-            result.append(String.format("%-7s | %-7s | %-7s | %-7s\n",
-                    "Ticker", "Max Arb", "Extended", "Aster"));
+
+            // Header
+            result.append(String.format("%-7s | %7s | %8s | %8s\n",
+                    "Ticker", "Max Arb",
+                    rates.getFirst().getFirstExchange().getDisplayName(),
+                    rates.getFirst().getSecondExchange().getDisplayName()));
             result.append("-".repeat(40)).append("\n");
 
+            // Data
             rates.stream()
                     .limit(10)
-                    .forEach(opp -> result.append(String.format("%-7s | %6.1f%% | %7.1f%% | %8.1f%%\n",
+                    .forEach(opp -> result.append(String.format("%-7s | %6.1f%% | %7.1f%% | %7.1f%%\n",
                             opp.getSymbol(),
                             opp.getArbitrageRate(),
-                            opp.getExtendedRate(),
-                            opp.getAsterRate())));
+                            opp.getFirstRate(),
+                            opp.getSecondRate())));
 
             result.append("```");
 
             sendMessage(chatId, result.toString());
         } catch (Exception e) {
-            sendMessage(chatId, " Error getting data");
+            sendMessage(chatId, "❌ Error getting data");
             log.error("Error sending rates", e);
         }
     }
 
-    private void calculatePositionPnl(Long chatId, String[] parts) {
-        log.info("Request to close all positions");
 
+    private void calculatePositionPnl(Long chatId, String[] parts) {
         //Checking parameter
         if (parts.length < 2 || parts[1].trim().isEmpty()) {
             sendMessage(chatId,
@@ -265,51 +298,123 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("🤖 *FundingBot:* Position Balances\n");
-        sb.append("━━━━━━━━━━━━━━━━━━\n\n");
+        sb.append("🤖 *FundingBot:* Positions History\n");
+        sb.append("━━━━━━━━━━━━━━━━━━\n");
 
-        balanceMap.entrySet().stream()
-                .sorted(Map.Entry.comparingByKey())
-                .forEach(entry -> {
-                    String positionId = entry.getKey();
-                    PositionBalance balance = entry.getValue();
+        double totalPnL = 0.0;
+        int wins = 0;
+        int losses = 0;
 
-                    String emoji;
+        for (Map.Entry<String, PositionBalance> entry : balanceMap.entrySet()) {
+            String positionId = entry.getKey();
+            PositionBalance balance = entry.getValue();
 
-                    if (balance.isClosed()) {
-                        // if closed - showing profit/loss
-                        emoji = balance.getProfit() > 0 ? "✅" : "❌";
-                        String profitSign = balance.getProfit() > 0 ? "+" : "";
+            if (balance.isClosed()) {
+                double pnl = balance.getProfit();
+                totalPnL += pnl;
 
-                        sb.append(String.format(
-                                "%s *#%s*\n" +
-                                        "   Before: $%.2f → After: $%.2f" +
-                                        " (P&L: %s$%.2f)\n",
-                                emoji,
-                                positionId,
-                                balance.getBalanceBefore(),
-                                balance.getBalanceAfter(),
-                                profitSign,
-                                balance.getProfit()
-                        ));
-                    } else {
-                        FundingCloseSignal position = openedPositions.get(positionId);
-                        emoji = (position != null && position.getMode() == HoldingMode.FAST_MODE)
-                                ? "⚡"
-                                : "🧠";
+                String emoji = pnl > 0 ? "💰" : "\uD83E\uDDF1";
+                String sign = pnl > 0 ? "+" : "";
 
-                        sb.append(String.format(
-                                "%s *#%s*\n" +
-                                        "   Before: $%.2f → After: _pending_\n",
-                                emoji,
-                                positionId,
-                                balance.getBalanceBefore()
-                        ));
-                    }
-                });
+                if (pnl > 0) wins++;
+                else losses++;
+
+                sb.append(String.format(
+                        "`%s` %s %s$%.2f\n",
+                        positionId,
+                        emoji,
+                        sign,
+                        pnl
+                ));
+            } else {
+                FundingCloseSignal position = openedPositions.get(positionId);
+                String emoji = (position != null && position.getMode() == HoldingMode.FAST_MODE)
+                        ? "⚡"
+                        : "🧠";
+
+                sb.append(String.format(
+                        "`%s` %s _Pending_\n",
+                        positionId,
+                        emoji
+                ));
+            }
+        }
+
+        // Summary
+        if (wins + losses > 0) {
+            String summaryEmoji = totalPnL >= 0 ? "🟢" : "🔴";
+            String sign = totalPnL >= 0 ? "+" : "";
+            double winRate = (double) wins / (wins + losses) * 100;
+
+            sb.append("━━━━━━━━━━━━━━━━━━\n");
+            sb.append(String.format(
+                    "%s *Total:* %s$%.2f\n" +
+                            "📊 *Win Rate:* %d/%d (%.1f%%)\n",
+                    summaryEmoji,
+                    sign,
+                    totalPnL,
+                    wins,
+                    wins + losses,
+                    winRate
+            ));
+        }
 
         return sb.toString();
     }
+
+
+//    public String formatBalanceMap(Map<String, PositionBalance> balanceMap,
+//                                   Map<String, FundingCloseSignal> openedPositions) {
+//        if (balanceMap.isEmpty()) {
+//            return "🤖 *FundingBot:* Balance Tracker\n\n_No positions tracked yet_";
+//        }
+//
+//        StringBuilder sb = new StringBuilder();
+//        sb.append("🤖 *FundingBot:* Position Balances\n");
+//        sb.append("━━━━━━━━━━━━━━━━━━\n");
+//
+//        balanceMap.entrySet().stream()
+//                .sorted(Map.Entry.comparingByKey())
+//                .forEach(entry -> {
+//                    String positionId = entry.getKey();
+//                    PositionBalance balance = entry.getValue();
+//
+//                    String emoji;
+//
+//                    if (balance.isClosed()) {
+//                        // if closed - showing profit/loss
+//                        emoji = balance.getProfit() > 0 ? "✅" : "❌";
+//                        String profitSign = balance.getProfit() > 0 ? "+" : "";
+//
+//                        sb.append(String.format(
+//                                "%s *#%s*\n" +
+//                                        "   Before: $%.2f → After: $%.2f" +
+//                                        " (P&L: %s$%.2f)\n",
+//                                emoji,
+//                                positionId,
+//                                balance.getBalanceBefore(),
+//                                balance.getBalanceAfter(),
+//                                profitSign,
+//                                balance.getProfit()
+//                        ));
+//                    } else {
+//                        FundingCloseSignal position = openedPositions.get(positionId);
+//                        emoji = (position != null && position.getMode() == HoldingMode.FAST_MODE)
+//                                ? "⚡"
+//                                : "🧠";
+//
+//                        sb.append(String.format(
+//                                "%s *#%s*\n" +
+//                                        "   Before: $%.2f → After: _pending_\n",
+//                                emoji,
+//                                positionId,
+//                                balance.getBalanceBefore()
+//                        ));
+//                    }
+//                });
+//
+//        return sb.toString();
+//    }
 
     private String formatPositionOpenedMessage(PositionOpenedEvent event) {
         if (!event.isSuccess()) {
@@ -324,7 +429,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
             return String.format(
                     "🤖 *FundingBot:* Position Opening Failed ❌\n\n" +
-                            "*Position ID:* `%s`\n" +
+                            "*ID:* `%s`\n" +
                             "*Mode:* %s\n" +
                             "*Ticker:* %s\n" +
                             "*Error:* %s\n",
@@ -337,7 +442,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         return String.format(
                 "🤖 *FundingBot:* Position Opened ✅\n\n" +
-                        "*Position ID:* `%s`\n" +
+                        "*ID:* `%s`\n" +
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
                         "*Margin used:* %.2f USD\n" +
@@ -355,7 +460,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         if (!event.isSuccess()) {
             return String.format(
                     "🤖 *FundingBot:* Position Close Error ❌\n\n" +
-                            "*Position ID:* `%s`\n" +
+                            "*ID:* `%s`\n" +
                             "*Mode:* %s\n" +
                             "*Ticker:* %s\n" +
                             "*Status:* Manual check required!",
@@ -364,13 +469,15 @@ public class TelegramChatService extends TelegramLongPollingBot {
                     event.getTicker()
             );
         }
+        String pnlEmoji = event.getPnl() >= 0 ? "💰" : "\uD83E\uDDF1";
 
         return String.format(
-                "🤖 *FundingBot:* Position Closed ✅\n\n" +
-                        "*Position ID:* `%s`\n" +
+                "🤖 *FundingBot:* Position Closed %s\n\n" +
+                        "*ID:* `%s`\n" +
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
                         "*P&L:* " + sign + "%.2f USD (%.2f%%)\n",
+                pnlEmoji,
                 event.getPositionId(),
                 event.getMode(),
                 event.getTicker(),
@@ -381,15 +488,17 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     private String formatAlert(ArbitrageRates rate) {
         return String.format("🚨 *High Arbitrage Alert* 🚨\n\n" +
-                        "*Symbol:* %s\n" +
+                        "*Symbol: %s*\n" +
                         "*Max Arb:* %.2f%%\n" +
-                        "*Extended:* %.2f%%\n" +
-                        "*Aster:* %.2f%%\n" +
+                        "*%s:* %.2f%%\n" +
+                        "*%s:* %.2f%%\n" +
                         "*Action:* %s",
                 rate.getSymbol(),
                 rate.getArbitrageRate(),
-                rate.getExtendedRate(),
-                rate.getAsterRate(),
+                rate.getFirstExchange().getDisplayName(),
+                rate.getFirstRate(),
+                rate.getSecondExchange().getDisplayName(),
+                rate.getSecondRate(),
                 rate.getAction());
     }
 
@@ -407,14 +516,14 @@ public class TelegramChatService extends TelegramLongPollingBot {
         long heldMinutes = duration.toMinutesPart();
 
         StringBuilder sb = new StringBuilder();
-        sb.append("🤖 *FundingBot:* Position P&L \uD83D\uDCCA \n\n");
-        sb.append("*Position ID:* ").append("`").append(pnlData.getPositionId()).append("`").append("\n");
+        sb.append("🤖 *FundingBot:* Profit Alert 🎯\n\n");
+        sb.append("*ID:* ").append("`").append(pnlData.getPositionId()).append("`").append("\n");
         sb.append("*Ticker:* ").append(pnlData.getTicker()).append("\n");
         sb.append("*Hold time:* ");
         if (heldHours > 0) {
             sb.append(heldHours).append("h ");
         }
-        sb.append(heldMinutes).append("m\n");
+        sb.append(heldMinutes).append("m\n\n");
 
         sb.append("*Gross P&L:* ").append(formatMoney(pnlData.getGrossPnl())).append("\n");
         sb.append("*Funding:* ").append(formatMoney(pnlData.getTotalFundingNet())).append("\n");
@@ -436,7 +545,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         return String.format(
                 "🤖 *FundingBot:* P&L Alert \uD83D\uDCB0\n\n" +
-                        "*Position:* `%s`\n" +
+                        "*ID:* `%s`\n" +
                         "*Ticker:* %s\n" +
                         "*ROI:* %.2f%%\n" +
                         "*Net:* $%.2f",

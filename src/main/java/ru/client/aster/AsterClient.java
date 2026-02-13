@@ -15,7 +15,9 @@ import org.apache.hc.core5.net.URIBuilder;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 import ru.client.ExchangeClient;
+import ru.dto.exchanges.ExchangeType;
 import ru.dto.exchanges.MarginType;
+import ru.dto.exchanges.OrderResult;
 import ru.dto.exchanges.aster.*;
 
 import javax.crypto.Mac;
@@ -103,7 +105,7 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    public String setLeverage(String symbol, int leverage) throws Exception {
+    public String setLeverage(String symbol, int leverage) {
         StringBuilder params = new StringBuilder();
         params.append("symbol=").append(symbol);
         params.append("&leverage=").append(leverage);
@@ -459,16 +461,21 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    public String closePosition(String symbol) throws InterruptedException {
+    public OrderResult closePosition(String symbol) {
         //Setting thread sleep for both Extended and Aster positions close at the same time
-        Thread.sleep(3000);
+//        Thread.sleep(3000);
         try {
             //Getting positions
             List<AsterPosition> positions = getPositions(symbol);
 
-            if (positions == null || positions.isEmpty()) {
+            if (Objects.isNull(positions) || positions.isEmpty()) {
                 log.info("[Aster] No positions for {}", symbol);
-                return "Position already closed";
+                return OrderResult.builder()
+                        .exchange(ExchangeType.ASTER)
+                        .symbol(symbol)
+                        .success(true)
+                        .message("Position already closed")
+                        .build();
             }
 
             //Choosing active position
@@ -483,7 +490,12 @@ public class AsterClient implements ExchangeClient {
 
             if (targetPos == null) {
                 log.info("[Aster] All positions for {} empty", symbol);
-                return "Position already closed";
+                return OrderResult.builder()
+                        .exchange(ExchangeType.ASTER)
+                        .symbol(symbol)
+                        .success(true)
+                        .message("Position already closed")
+                        .build();
             }
 
             String positionSide = targetPos.getPositionSide();
@@ -515,11 +527,22 @@ public class AsterClient implements ExchangeClient {
                 log.warn("[Aster] Position close Timeout");
             }
 
-            return result;
+            return OrderResult.builder()
+                    .exchange(ExchangeType.ASTER)
+                    .symbol(symbol)
+                    .orderId(result)
+                    .success(true)
+                    .message("Position closed successfully")
+                    .build();
 
         } catch (Exception e) {
             log.error("[Aster] Error closing position for {}", symbol, e);
-            return null;
+            return OrderResult.builder()
+                    .exchange(ExchangeType.ASTER)
+                    .symbol(symbol)
+                    .success(true)
+                    .message("Error closing position")
+                    .build();
         }
     }
 

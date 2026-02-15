@@ -15,4 +15,5 @@ public class PositionClosedEvent {
     private final boolean success;
     private final String mode;
     private final double rate;
+    private final String closureReason;
 }

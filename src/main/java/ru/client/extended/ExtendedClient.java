@@ -536,31 +536,6 @@ public class ExtendedClient implements ExchangeClient {
         }
     }
 
-    public Double getEquity() {
-        String balanceUri = baseUrl + "/balance";
-        try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(balanceUri))
-                    .timeout(Duration.ofSeconds(20))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() != 200) return 0.0;
-
-            ExtendedBalanceDto dto = objectMapper.readValue(response.body(), ExtendedBalanceDto.class);
-            if (!"OK".equalsIgnoreCase(dto.getStatus())) return 0.0;
-
-            double equity = Double.parseDouble(dto.getData().getEquity());
-            log.info("[Extended] Equity: ${}", equity);
-            return equity;
-
-        } catch (Exception e) {
-            log.error("[Extended] Failed to get equity", e);
-            return 0.0;
-        }
-    }
-
     public ExtendedFundingHistoryResponse getFundingHistory(String market, String side, Long fromTime, Integer limit) {
         try {
             StringBuilder url = new StringBuilder(baseUrl + "/funding/history");
@@ -797,74 +772,6 @@ public class ExtendedClient implements ExchangeClient {
 
         } catch (Exception e) {
             log.error("[Extended] Error estimating execution price for {}", market, e);
-            return null;
-        }
-    }
-
-    public Double getBestBid(String market) {
-        try {
-            ExtendedOrderBook book = getOrderBook(market);
-            if (book == null || book.getBid() == null || book.getBid().isEmpty()) {
-                return null;
-            }
-            return Double.parseDouble(book.getBid().get(0).getPrice());
-        } catch (Exception e) {
-            log.error("[Extended] Error getting best bid for {}", market, e);
-            return null;
-        }
-    }
-
-    public Double getBestAsk(String market) {
-        try {
-            ExtendedOrderBook book = getOrderBook(market);
-            if (book == null || book.getAsk() == null || book.getAsk().isEmpty()) {
-                return null;
-            }
-            return Double.parseDouble(book.getAsk().get(0).getPrice());
-        } catch (Exception e) {
-            log.error("[Extended] Error getting best ask for {}", market, e);
-            return null;
-        }
-    }
-
-    public List<ExtendedTrade> getRecentTrades(String market) {
-        try {
-            String url = baseUrl + "/api/v1/info/markets/" + market + "/trades";
-
-            log.debug("[Extended] GET recent trades: {}", url);
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(10))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() != 200) {
-                log.error("[Extended] Recent trades failed: code={}, body={}",
-                        response.statusCode(), response.body());
-                return null;
-            }
-
-            ExtendedTradesResponse tradesResponse = objectMapper.readValue(
-                    response.body(),
-                    ExtendedTradesResponse.class
-            );
-
-            if (!"OK".equalsIgnoreCase(tradesResponse.getStatus())) {
-                log.warn("[Extended] Recent trades status != OK: {}", tradesResponse.getStatus());
-                return null;
-            }
-
-            log.info("[Extended] Recent trades {}: count={}",
-                    market,
-                    tradesResponse.getData() != null ? tradesResponse.getData().size() : 0);
-
-            return tradesResponse.getData();
-
-        } catch (Exception e) {
-            log.error("[Extended] Error getting recent trades for {}", market, e);
             return null;
         }
     }

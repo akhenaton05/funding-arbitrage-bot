@@ -13,6 +13,8 @@ public class FundingConfig {
     private FastModeConfig fast;
     private SmartModeConfig smart;
     private PnLConfig pnl;
+    private SlTpConfig sltp;
+    private OiConfig oi;
     
     @Data
     public static class ThresholdsConfig {
@@ -39,5 +41,18 @@ public class FundingConfig {
         private double thresholdPercent;
         private long checkIntervalMs;
         private boolean enableNotifications;
+    }
+
+    @Data
+    public static class SlTpConfig {
+        private boolean enabled;
+        private double stopLossPercent;
+        private double takeProfitPercent;
+    }
+
+    @Data
+    public static class OiConfig {
+        private boolean enabled ;
+        private int maxRank;
     }
 }

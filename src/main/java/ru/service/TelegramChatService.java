@@ -476,11 +476,15 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*ID:* `%s`\n" +
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
+                        "*Fund Rate:* %s\n" +
+                        "*Reason:* %s\n" +
                         "*P&L:* " + sign + "%.2f USD (%.2f%%)\n",
                 pnlEmoji,
                 event.getPositionId(),
                 event.getMode(),
                 event.getTicker(),
+                event.getRate(),
+                event.getClosureReason(),
                 event.getPnl(),
                 event.getPercent()
         );

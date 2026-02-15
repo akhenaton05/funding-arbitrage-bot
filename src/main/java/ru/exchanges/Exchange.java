@@ -130,4 +130,12 @@ public interface Exchange {
     }
 
     void setPairedExchange(ExchangeType pairedWith);
+
+    String placeStopLoss(String symbol, Direction direction, double stopPrice);
+
+    String placeTakeProfit(String symbol, Direction direction, double tpPrice);
+
+    void cancelAllOrders(String symbol);
+
+    boolean supportsSlTp();
 }

@@ -36,6 +36,26 @@ public class Extended implements Exchange{
     }
 
     @Override
+    public String placeStopLoss(String symbol, Direction direction, double stopPrice) {
+        return "[Extended] TP/SL not yet supported by API";
+    }
+
+    @Override
+    public String placeTakeProfit(String symbol, Direction direction, double tpPrice) {
+        return "[Extended] TP/SL not yet supported by API";
+    }
+
+    @Override
+    public void cancelAllOrders(String symbol) {
+
+    }
+
+    @Override
+    public boolean supportsSlTp() {
+        return false;
+    }
+
+    @Override
     public int getOpenDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
             case ASTER -> 0;  // Wait 4s for Extended to open

@@ -118,14 +118,6 @@ public class ExchangesService {
 
             double currentSpread = currentRate.getArbitrageRate();
 
-//            //Checking directions flip
-//            if (!pos.getAction().equalsIgnoreCase(currentRate.getAction())) {
-//                log.info("[FundingBot] Funding rate flipped! Closing {}: spread={}, held={}min",
-//                        pos.getTicker(), currentSpread, getHeldMinutes(pos));
-//                toClose.add(pos.getId());
-//                continue;
-//            }
-
             if (shouldCloseSmart(pos, currentSpread, currentRate)) {
                 log.info("[FundingBot] Closing {}: spread={}, held={}min",
                         pos.getTicker(), currentSpread, getHeldMinutes(pos));
@@ -194,6 +186,37 @@ public class ExchangesService {
         }
     }
 
+    @Scheduled(fixedDelay = 600000) // Каждые 10 минут
+    public void checkPositions() {
+        if (openedPositions.isEmpty()) {
+            return;
+        }
+
+        log.debug("[FundingBot] Checking {} opened positions for liquidation/closure",
+                openedPositions.size());
+
+        List<String> toRemove = new ArrayList<>();
+
+        for (FundingCloseSignal signal : openedPositions.values()) {
+            try {
+                boolean wasClosed = checkOpenedPositions(signal);
+
+                if (wasClosed) {
+                    toRemove.add(signal.getId());
+                }
+
+            } catch (Exception e) {
+                log.error("[FundingBot] Failed to check position {}: {}",
+                        signal.getId(), e.getMessage());
+            }
+        }
+
+        for (String positionId : toRemove) {
+            log.info("[FundingBot] Removing closed position {}", positionId);
+            openedPositions.remove(positionId);
+        }
+    }
+
     /**
      * Main logic
      */
@@ -218,7 +241,7 @@ public class ExchangesService {
             }
         }
 
-        if (marginBalance <= 1) {
+        if (marginBalance <= 10) {
             String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
 
@@ -386,11 +409,13 @@ public class ExchangesService {
             // Get successful order IDs
             try {
                 if (firstSuccess) rollbackFirstId = firstFuture.get();
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
 
             try {
                 if (secondSuccess) rollbackSecondId = secondFuture.get();
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
 
             log.warn("[FundingBot] Rollback status: {} = {}, {} = {}",
                     exchangeOne.getName(), firstSuccess ? "✅" : "❌",
@@ -507,6 +532,11 @@ public class ExchangesService {
 
         openedPositions.put(positionToClose.getId(), positionToClose);
 
+        //Adding SL/TP orders
+        if (fundingConfig.getSltp().isEnabled()) {
+            setupSlTpOrders(positionToClose);
+        }
+
         String successMsg = "[FundingBot] Delta-neutral position opened | " +
                 exchangeOne.getName() + ": " + firstOrderId + " | " +
                 exchangeTwo.getName() + ": " + secondOrderId + " | " +
@@ -585,7 +615,7 @@ public class ExchangesService {
                     String.format("%.4f", profit),
                     String.format("%.2f", profitPercent));
 
-            //Collecting tare at closing
+            //Collecting rate at closing
             ArbitrageRates currentRate = getCurrentSpread(signal.getTicker());
             currentSpread = currentRate.getArbitrageRate();
 
@@ -596,7 +626,8 @@ public class ExchangesService {
                     profitPercent,
                     true,
                     signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
-                    currentSpread
+                    currentSpread,
+                    signal.getClosureReason()
             ));
 
             notifiedPositions.remove(signal.getId());
@@ -613,84 +644,12 @@ public class ExchangesService {
                     0,
                     false,
                     signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
-                    signal.getCurrentFindingRate()
+                    signal.getCurrentFindingRate(),
+                    signal.getClosureReason()
             ));
 
             return String.format("[FundingBot] %s Partial close - Manual check Needed!\n", signal.getTicker());
         }
-    }
-
-    public PositionPnLData pnlPositionCalculator(String posId) {
-        return calculateCurrentPnL(openedPositions.get(posId));
-    }
-
-    private void checkPnLThreshold(FundingCloseSignal signal, PositionPnLData pnlData) {
-        if (!fundingConfig.getPnl().isEnableNotifications()) {
-            return;
-        }
-
-        if (notifiedPositions.contains(signal.getId())) {
-            return;
-        }
-
-        //Grace period check
-        long positionAgeMinutes = TimeUnit.MILLISECONDS.toMinutes(
-                System.currentTimeMillis() - signal.getOpenedAtMs()
-        );
-
-        long gracePeriodMinutes = 10; // First 10 min - no notis
-
-        if (positionAgeMinutes < gracePeriodMinutes) {
-            log.debug("[FundingBot] {} P&L check skipped - grace period (age: {}min, grace: {}min)",
-                    signal.getId(), positionAgeMinutes, gracePeriodMinutes);
-            return;
-        }
-
-        double netPnl = pnlData.getNetPnl();
-        double marginUsed = signal.getBalance();
-
-        double profitPercent = (netPnl / marginUsed) * 100;
-
-        double thresholdPercent = fundingConfig.getPnl().getThresholdPercent();
-
-        //Checking threshold
-        if (profitPercent >= thresholdPercent) {
-            log.info("[FundingBot] 🎯 P&L Threshold reached for {}: {}% (threshold: {}%)",
-                    signal.getId(),
-                    String.format("%.2f", profitPercent),
-                    String.format("%.2f", thresholdPercent));
-
-            //Sending notis
-            String mode = signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode";
-
-            eventPublisher.publishEvent(new PnLThresholdEvent(
-                    signal.getId(),
-                    signal.getTicker(),
-                    pnlData,
-                    profitPercent,
-                    marginUsed,
-                    mode
-            ));
-
-            log.info("[FundingBot] Profit threshold reached, closing position {}", signal.getId());
-            closePositions(signal);
-
-            //Adding to notified
-            notifiedPositions.add(signal.getId());
-
-            log.info("[FundingBot] P&L threshold notification sent for {}", signal.getId());
-        } else {
-            log.debug("[FundingBot] {} P&L: {}% (threshold: {}% - not reached)",
-                    signal.getId(),
-                    String.format("%.2f", profitPercent),
-                    String.format("%.2f", thresholdPercent));
-        }
-    }
-
-
-    private void rollbackPositionId() {
-        long rolledBack = positionIdCounter.decrementAndGet();
-        log.debug("[FundingBot] Position ID counter rolled back to: {}", rolledBack);
     }
 
     /**
@@ -1156,11 +1115,6 @@ public class ExchangesService {
         }
     }
 
-    private String generatePositionId() {
-        long id = positionIdCounter.getAndIncrement();
-        return String.format("P-%04d", id);
-    }
-
     //Events
     private void publishFailureEvent(String positionId, FundingOpenSignal signal, String errorMsg, double balance, boolean success) {
         eventPublisher.publishEvent(new PositionOpenedEvent(
@@ -1219,8 +1173,7 @@ public class ExchangesService {
             pos.setBadStreak(pos.getBadStreak() + 1);
             log.debug("[FundingBot] Bad spread: {} <= {}, streak={}",
                     currentSpread, threshold, pos.getBadStreak());
-        } else {
-            pos.setBadStreak(0);
+            pos.setBadStreak(pos.getBadStreak() + 1);
         }
 
         int badStreakThreshold = fundingConfig.getSmart().getBadStreakThreshold();
@@ -1253,16 +1206,15 @@ public class ExchangesService {
 
     public void closeAllPositions() {
         if (openedPositions.isEmpty()) {
-            log.debug("[FundingBot] Funding check: no positions to close");
+            log.debug("[FundingBot] No positions to close");
             return;
         }
 
-        log.info("[FundingBot] Funding received! Closing {} positions...", openedPositions.size());
-
         StringBuilder finalList = new StringBuilder();
 
-        for (FundingCloseSignal signalToClose : openedPositions.values()) {
-            finalList.append(closePositions(signalToClose));
+        for (FundingCloseSignal signal : openedPositions.values()) {
+            signal.setClosureReason("Manual closing");
+            finalList.append(closePositions(signal));
         }
 
         openedPositions.clear();
@@ -1281,9 +1233,225 @@ public class ExchangesService {
         log.info("[FundingBot] Manual close requested for position {}: {}",
                 positionId, signal.getTicker());
 
+        signal.setClosureReason("Manual closing");
         closePositions(signal);
 
         openedPositions.remove(positionId);
         log.info("[FundingBot] Position {} closed manually", positionId);
+    }
+
+    private void setupSlTpOrders(FundingCloseSignal position) {
+        try {
+            log.info("[FundingBot] Setting up orders for position {}", position.getId());
+
+            setupSlTpForExchange(
+                    position.getFirstExchange(),
+                    position.getFirstPosition().getDirection(),
+                    position.getTicker()
+            );
+
+            setupSlTpForExchange(
+                    position.getSecondExchange(),
+                    position.getSecondPosition().getDirection(),
+                    position.getTicker()
+            );
+
+        } catch (Exception e) {
+            log.error("[FundingBot] Failed to setup SL/TP orders for position {}",
+                    position.getId(), e);
+        }
+    }
+
+    private void setupSlTpForExchange(Exchange exchange, Direction direction, String ticker) {
+        if (!exchange.supportsSlTp()) {
+            log.info("[FundingBot] {} doesn't support SL/TP, skipping", exchange.getName());
+            return;
+        }
+
+        try {
+            List<Position> positions = exchange.getPositions(ticker, direction);
+
+            if (positions == null || positions.isEmpty()) {
+                log.warn("[FundingBot] Position not found on {}", exchange.getName());
+                return;
+            }
+
+            Position position = positions.getFirst();
+            double entryPrice = position.getEntryPrice();
+
+            double slPercent = fundingConfig.getSltp().getStopLossPercent() / 100.0;
+            double tpPercent = fundingConfig.getSltp().getTakeProfitPercent() / 100.0;
+
+            double stopLossPrice;
+            double takeProfitPrice;
+
+            if (direction == Direction.LONG) {
+                stopLossPrice = entryPrice * (1 - slPercent);
+                takeProfitPrice = entryPrice * (1 + tpPercent);
+            } else {
+                stopLossPrice = entryPrice * (1 + slPercent);
+                takeProfitPrice = entryPrice * (1 - tpPercent);
+            }
+
+            log.info("[FundingBot] {} {} Entry={}, SL={} (-{}%), TP={} (+{}%)",
+                    exchange.getName(),
+                    direction,
+                    String.format("%.6f", entryPrice),
+                    String.format("%.6f", stopLossPrice),
+                    String.format("%.2f", fundingConfig.getSltp().getStopLossPercent()),
+                    String.format("%.6f", takeProfitPrice),
+                    String.format("%.2f", fundingConfig.getSltp().getTakeProfitPercent())
+            );
+
+            String slOrderId = exchange.placeStopLoss(ticker, direction, stopLossPrice);
+            log.info("[FundingBot] {} Stop Loss placed: {}", exchange.getName(), slOrderId);
+
+            String tpOrderId = exchange.placeTakeProfit(ticker, direction, takeProfitPrice);
+            log.info("[FundingBot] {} Take Profit placed: {}", exchange.getName(), tpOrderId);
+
+        } catch (Exception e) {
+            log.error("[FundingBot] Failed to setup SL/TP for {} {}",
+                    exchange.getName(), ticker, e);
+        }
+    }
+
+    //Checking positions in order of some of them got liquidated
+    public boolean checkOpenedPositions(FundingCloseSignal signal) {
+        Exchange firstExchange = signal.getFirstExchange();
+        Exchange secondExchange = signal.getSecondExchange();
+
+        List<Position> firstPositions = firstExchange.getPositions(signal.getTicker(), signal.getFirstPosition().getDirection());
+
+        if (Objects.isNull(firstPositions) || firstPositions.isEmpty()) {
+            log.error("[FundingBot] {} position Closed/Liquidated for {}! Closing hedge on {}",
+                    firstExchange.getName(),
+                    signal.getTicker(),
+                    secondExchange.getName());
+
+            signal.setClosureReason("Order/Liquidation trigger");
+            closePositions(signal);
+            return true;
+        }
+
+        //Validating position
+        Position firstPosition = firstPositions.getFirst();
+
+        if (firstPosition.getSize() <= 0) {
+            log.error("[FundingBot] {} position Closed/Liquidated for {}! Closing hedge on {}",
+                    firstExchange.getName(),
+                    signal.getTicker(),
+                    secondExchange.getName());
+
+            signal.setClosureReason("Order/Liquidation trigger");
+            closePositions(signal);
+            return true;
+        }
+
+        List<Position> secondPositions = secondExchange.getPositions(signal.getTicker(), signal.getSecondPosition().getDirection());
+
+        if (Objects.isNull(secondPositions) || secondPositions.isEmpty()) {
+            log.error("[FundingBot] {} position Closed/Liquidated for {}! Closing hedge on {}",
+                    secondExchange.getName(),
+                    signal.getTicker(),
+                    firstExchange.getName());
+
+            signal.setClosureReason("Order/Liquidation trigger");
+            closePositions(signal);
+            return true;
+        }
+
+        Position secondPosition = secondPositions.getFirst();
+
+        if (secondPosition.getSize() <= 0) {
+            if (log.isErrorEnabled()) {
+                log.error("[FundingBot] {} position Closed/Liquidated for {}! Closing hedge on {}",
+                        secondExchange.getName(),
+                        signal.getTicker(),
+                        firstExchange.getName());
+            }
+            signal.setClosureReason("Order/Liquidation trigger");
+            closePositions(signal);
+            return true;
+        }
+
+        return false;
+    }
+
+    private String generatePositionId() {
+        long id = positionIdCounter.getAndIncrement();
+        return String.format("P-%04d", id);
+    }
+
+    private void rollbackPositionId() {
+        long rolledBack = positionIdCounter.decrementAndGet();
+        log.debug("[FundingBot] Position ID counter rolled back to: {}", rolledBack);
+    }
+
+    public PositionPnLData pnlPositionCalculator(String posId) {
+        return calculateCurrentPnL(openedPositions.get(posId));
+    }
+
+    private void checkPnLThreshold(FundingCloseSignal signal, PositionPnLData pnlData) {
+        if (!fundingConfig.getPnl().isEnableNotifications()) {
+            return;
+        }
+
+        if (notifiedPositions.contains(signal.getId())) {
+            return;
+        }
+
+        //Grace period check
+        long positionAgeMinutes = TimeUnit.MILLISECONDS.toMinutes(
+                System.currentTimeMillis() - signal.getOpenedAtMs()
+        );
+
+        long gracePeriodMinutes = 10; // First 10 min - no notis
+
+        if (positionAgeMinutes < gracePeriodMinutes) {
+            log.debug("[FundingBot] {} P&L check skipped - grace period (age: {}min, grace: {}min)",
+                    signal.getId(), positionAgeMinutes, gracePeriodMinutes);
+            return;
+        }
+
+        double netPnl = pnlData.getNetPnl();
+        double marginUsed = signal.getBalance();
+
+        double profitPercent = (netPnl / marginUsed) * 100;
+
+        double thresholdPercent = fundingConfig.getPnl().getThresholdPercent();
+
+        //Checking threshold
+        if (profitPercent >= thresholdPercent) {
+            log.info("[FundingBot] 🎯 P&L Threshold reached for {}: {}% (threshold: {}%)",
+                    signal.getId(),
+                    String.format("%.2f", profitPercent),
+                    String.format("%.2f", thresholdPercent));
+
+            //Sending notis
+            String mode = signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode";
+
+            eventPublisher.publishEvent(new PnLThresholdEvent(
+                    signal.getId(),
+                    signal.getTicker(),
+                    pnlData,
+                    profitPercent,
+                    marginUsed,
+                    mode
+            ));
+
+            log.info("[FundingBot] Profit threshold reached, closing position {}", signal.getId());
+            signal.setClosureReason("P&L threshold reached");
+            closePositions(signal);
+
+            //Adding to notified
+            notifiedPositions.add(signal.getId());
+
+            log.info("[FundingBot] P&L threshold notification sent for {}", signal.getId());
+        } else {
+            log.debug("[FundingBot] {} P&L: {}% (threshold: {}% - not reached)",
+                    signal.getId(),
+                    String.format("%.2f", profitPercent),
+                    String.format("%.2f", thresholdPercent));
+        }
     }
 }

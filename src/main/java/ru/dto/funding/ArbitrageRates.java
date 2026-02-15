@@ -16,7 +16,8 @@ public class ArbitrageRates {
     private ExchangeType secondExchange;
     private double firstRate;
     private double secondRate;
-    private String action;  //"SHORT Extended, LONG Binance"
+    private String action;
+    private Integer oiRank;
 
     //Lower rate → LONG (receive funding)
     //Higher rate → SHORT (pay funding)

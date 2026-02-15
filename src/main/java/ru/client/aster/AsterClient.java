@@ -6,6 +6,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
+import org.apache.hc.client5.http.classic.methods.HttpDelete;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
@@ -132,15 +133,6 @@ public class AsterClient implements ExchangeClient {
         return response;
     }
 
-
-    public void setMarginType(String symbol, MarginType type) throws Exception {
-        StringBuilder params = new StringBuilder();
-        params.append("symbol=").append(symbol);
-        params.append("&marginType=").append(type.toString());
-
-        executeSignedRequest("POST", "/fapi/v1/marginType", params.toString());
-    }
-
     //Generate signature for the query
     private String sign(String queryString) {
         try {
@@ -180,6 +172,13 @@ public class AsterClient implements ExchangeClient {
                 req.setHeader("X-MBX-APIKEY", publicApiKey);
                 req.setHeader("Content-Type", "application/x-www-form-urlencoded");
                 log.info("[Aster] {}", uri);
+                try (CloseableHttpResponse resp = httpClient.execute(req)) {
+                    return handleResponse(resp);
+                }
+            } else if ("DELETE".equalsIgnoreCase(method)) {
+                HttpDelete req = new HttpDelete(uri);
+                req.setHeader("X-MBX-APIKEY", publicApiKey);
+                log.info("[Aster] DELETE {}", uri);
                 try (CloseableHttpResponse resp = httpClient.execute(req)) {
                     return handleResponse(resp);
                 }
@@ -438,32 +437,7 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    public String cancelAllOrders(String symbol) {
-        String query = "symbol=" + symbol;
-        log.info("[Aster] Cancelling all {} orders", symbol);
-
-        try {
-            return executeSignedRequest("POST", "/fapi/v1/allOpenOrders", query);
-        } catch (Exception e) {
-            log.error("[Aster] Cancel all failed", e);
-            return null;
-        }
-    }
-
-    //Optional
-    public String getOpenOrders(String symbol) {
-        String query = symbol != null ? "symbol=" + symbol : null;
-        try {
-            return executeSignedRequest("GET", "/fapi/v1/openOrders", query);
-        } catch (Exception e) {
-            log.error("[Aster] Get open orders failed", e);
-            return null;
-        }
-    }
-
     public OrderResult closePosition(String symbol) {
-        //Setting thread sleep for both Extended and Aster positions close at the same time
-//        Thread.sleep(3000);
         try {
             //Getting positions
             List<AsterPosition> positions = getPositions(symbol);
@@ -702,15 +676,6 @@ public class AsterClient implements ExchangeClient {
         return info.getMinutesUntilFunding();
     }
 
-    public double getCurrentFundingRate(String symbol) {
-        PremiumIndexResponse info = getPremiumIndexInfo(symbol);
-        if (info == null) {
-            log.error("[Aster] Failed to get premium index for {}", symbol);
-            return 0.0;
-        }
-        return info.getLastFundingRateAsDouble();
-    }
-
     public AsterBookTicker getBookTicker(String symbol) {
         try {
             URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/ticker/bookTicker");
@@ -759,32 +724,6 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    public Double getBestBid(String symbol) {
-        try {
-            AsterBookTicker ticker = getBookTicker(symbol);
-            if (ticker == null) {
-                return null;
-            }
-            return Double.parseDouble(ticker.getBidPrice());
-        } catch (Exception e) {
-            log.error("[Aster] Error getting best bid for {}", symbol, e);
-            return null;
-        }
-    }
-
-    public Double getBestAsk(String symbol) {
-        try {
-            AsterBookTicker ticker = getBookTicker(symbol);
-            if (ticker == null) {
-                return null;
-            }
-            return Double.parseDouble(ticker.getAskPrice());
-        } catch (Exception e) {
-            log.error("[Aster] Error getting best ask for {}", symbol, e);
-            return null;
-        }
-    }
-
     public Double estimateExecutionPrice(String symbol, double size, boolean isSell) {
         try {
             AsterBookTicker ticker = getBookTicker(symbol);
@@ -822,40 +761,6 @@ public class AsterClient implements ExchangeClient {
 
         } catch (Exception e) {
             log.error("[Aster] Error estimating execution price for {}", symbol, e);
-            return null;
-        }
-    }
-
-    public List<AsterTrade> getRecentTrades(String symbol, Integer limit) {
-        try {
-            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/trades");
-            builder.addParameter("symbol", symbol);
-            if (limit != null) {
-                builder.addParameter("limit", String.valueOf(limit));
-            }
-            URI uri = builder.build();
-
-            HttpGet get = new HttpGet(uri);
-            log.debug("[Aster] GET recent trades for {}", symbol);
-
-            try (CloseableHttpResponse resp = httpClient.execute(get)) {
-                int code = resp.getCode();
-                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
-
-                if (code != 200) {
-                    log.error("[Aster] Recent trades failed: code={}, body={}", code, body);
-                    return null;
-                }
-
-                List<AsterTrade> trades = objectMapper.readValue(body,
-                        objectMapper.getTypeFactory().constructCollectionType(List.class, AsterTrade.class));
-
-                log.info("[Aster] Recent trades {}: count={}", symbol, trades.size());
-
-                return trades;
-            }
-        } catch (Exception e) {
-            log.error("[Aster] Error getting recent trades for {}", symbol, e);
             return null;
         }
     }
@@ -1011,6 +916,91 @@ public class AsterClient implements ExchangeClient {
         } catch (Exception e) {
             log.error("[Aster] Error calculating max size for {}", symbol, e);
             return null;
+        }
+    }
+
+    public String placeStopLoss(String symbol, String side, String positionSide, double stopPrice) {
+        StringBuilder params = new StringBuilder();
+        params.append("symbol=").append(symbol);
+        params.append("&side=").append(side);
+        params.append("&positionSide=").append(positionSide);
+        params.append("&type=STOP_MARKET");
+        params.append("&stopPrice=").append(stopPrice);
+        params.append("&closePosition=true");
+        params.append("&workingType=MARK_PRICE");
+        params.append("&priceProtect=TRUE");
+        params.append("&newOrderRespType=RESULT");
+
+        log.info("[Aster] Placing Stop Loss: {} {} stopPrice={}", symbol, positionSide, stopPrice);
+
+        try {
+            String responseBody = executeSignedRequest("POST", "/fapi/v1/order", params.toString());
+
+            if (responseBody == null || responseBody.isBlank()) {
+                log.warn("[Aster] Empty SL response");
+                return null;
+            }
+
+            OrderResponse response = objectMapper.readValue(responseBody, OrderResponse.class);
+            String orderId = response.getOrderId() != null
+                    ? String.valueOf(response.getOrderId())
+                    : response.getClientOrderId();
+
+            log.info("[Aster] Stop Loss placed: orderId={}, status={}", orderId, response.getStatus());
+            return orderId;
+
+        } catch (Exception e) {
+            log.error("[Aster] Failed to place Stop Loss for {}", symbol, e);
+            return null;
+        }
+    }
+
+    public String placeTakeProfit(String symbol, String side, String positionSide, double tpPrice) {
+        StringBuilder params = new StringBuilder();
+        params.append("symbol=").append(symbol);
+        params.append("&side=").append(side);
+        params.append("&positionSide=").append(positionSide);
+        params.append("&type=TAKE_PROFIT_MARKET");
+        params.append("&stopPrice=").append(tpPrice);
+        params.append("&closePosition=true");
+        params.append("&workingType=MARK_PRICE");
+        params.append("&priceProtect=TRUE");
+        params.append("&newOrderRespType=RESULT");
+
+        log.info("[Aster] Placing Take Profit: {} {} stopPrice={}", symbol, positionSide, tpPrice);
+
+        try {
+            String responseBody = executeSignedRequest("POST", "/fapi/v1/order", params.toString());
+
+            if (responseBody == null || responseBody.isBlank()) {
+                log.warn("[Aster] Empty TP response");
+                return null;
+            }
+
+            OrderResponse response = objectMapper.readValue(responseBody, OrderResponse.class);
+            String orderId = response.getOrderId() != null
+                    ? String.valueOf(response.getOrderId())
+                    : response.getClientOrderId();
+
+            log.info("[Aster] Take Profit placed: orderId={}, status={}", orderId, response.getStatus());
+            return orderId;
+
+        } catch (Exception e) {
+            log.error("[Aster] Failed to place Take Profit for {}", symbol, e);
+            return null;
+        }
+    }
+
+    public void cancelAllOrders(String symbol) {
+        String params = "symbol=" + symbol;
+
+        log.info("[Aster] Cancelling all orders for {}", symbol);
+
+        try {
+            String response = executeSignedRequest("DELETE", "/fapi/v1/allOpenOrders", params);
+            log.info("[Aster] All orders cancelled for {}: {}", symbol, response);
+        } catch (Exception e) {
+            log.error("[Aster] Failed to cancel orders for {}", symbol, e);
         }
     }
 }

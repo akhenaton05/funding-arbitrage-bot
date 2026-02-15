@@ -35,6 +35,11 @@ public class FundingArbitrageService {
     private final FundingConfig fundingConfig;
     private static final String API_URL = "https://api.loris.tools/funding";
 
+    //Cache for API response for parsing
+    private Map<String, Object> cachedFullResponse = null;
+    private long lastFetchTime = 0;
+    private static final long CACHE_TTL_MS = 60000; // 1 min cache life
+
     private static final Set<String> SUPPORTED_EXCHANGES = Set.of(
             "extended",
             "aster"
@@ -50,18 +55,100 @@ public class FundingArbitrageService {
         this.eventPublisher = eventPublisher;
     }
 
+//    public Map<String, Map<String, Object>> getFundingRates() {
+//        try {
+//            HttpGet httpGet = new HttpGet(API_URL);
+//            return executeRequest(httpGet);
+//        } catch (Exception e) {
+//            log.error("Failed to get funding rates", e);
+//            throw new RuntimeException(e);
+//        }
+//    }
+
+    /**
+     * Получить funding_rates из кэшированного ответа
+     */
     public Map<String, Map<String, Object>> getFundingRates() {
-        try {
-            HttpGet httpGet = new HttpGet(API_URL);
-            return executeRequest(httpGet);
-        } catch (Exception e) {
-            log.error("Failed to get funding rates", e);
-            throw new RuntimeException(e);
+        Map<String, Object> fullResponse = getFullApiResponse();
+
+        if (fullResponse.isEmpty()) {
+            log.error("[FundingBot] Full response is empty");
+            return Collections.emptyMap();
         }
+
+        Map<String, Map<String, Object>> fundingRates =
+                (Map<String, Map<String, Object>>) fullResponse.get("funding_rates");
+
+        if (fundingRates == null) {
+            log.error("[FundingBot] No funding_rates in API response");
+            return Collections.emptyMap();
+        }
+
+        log.info("[FundingBot] Funding rates found");
+        return fundingRates;
     }
+
+
+//    public List<ArbitrageRates> calculateArbitrageRates() {
+//        Map<String, Map<String, Object>> fundingRates = getFundingRates();
+//
+//        Map<String, Map<String, Object>> filteredRates = new HashMap<>();
+//
+//        for (Map.Entry<String, Map<String, Object>> entry : fundingRates.entrySet()) {
+//            String exchangeName = entry.getKey().toLowerCase();
+//
+//            if (SUPPORTED_EXCHANGES.contains(exchangeName)) {
+//                filteredRates.put(entry.getKey(), entry.getValue());
+//            }
+//        }
+//
+//        log.info("[FundingBot] Filtered {} supported exchanges from {} total",
+//                filteredRates.size(), fundingRates.size());
+//
+//        if (filteredRates.size() < 2) {
+//            log.warn("[FundingBot] Not enough supported exchanges for arbitrage: {}",
+//                    filteredRates.keySet());
+//            return Collections.emptyList();
+//        }
+//
+//        List<ArbitrageRates> arbitrageRates = new ArrayList<>();
+//        List<String> exchanges = new ArrayList<>(filteredRates.keySet());
+//
+//        for (int i = 0; i < exchanges.size(); i++) {
+//            for (int j = i + 1; j < exchanges.size(); j++) {
+//                String ex1Name = exchanges.get(i);
+//                String ex2Name = exchanges.get(j);
+//
+//                Map<String, Object> ex1Rates = filteredRates.get(ex1Name);
+//                Map<String, Object> ex2Rates = filteredRates.get(ex2Name);
+//
+//                arbitrageRates.addAll(
+//                        findArbitrageOpportunities(ex1Name, ex1Rates, ex2Name, ex2Rates)
+//                );
+//            }
+//        }
+//
+//        // Sort by arbitrage rate
+//        arbitrageRates.sort(Comparator.comparingDouble(ArbitrageRates::getArbitrageRate).reversed());
+//
+//        return arbitrageRates;
+//    }
 
     public List<ArbitrageRates> calculateArbitrageRates() {
         Map<String, Map<String, Object>> fundingRates = getFundingRates();
+
+        if (fundingRates.isEmpty()) {
+            log.error("[FundingBot] No funding rates available");
+            return Collections.emptyList();
+        }
+
+        // ✅ Получаем OI rankings (если фильтр включен)
+        Map<String, Integer> oiRankings = Collections.emptyMap();
+        if (fundingConfig.getOi().isEnabled()) {
+            oiRankings = getOiRankings();
+            log.info("[FundingBot] OI filter enabled with max rank: {}",
+                    fundingConfig.getOi().getMaxRank());
+        }
 
         Map<String, Map<String, Object>> filteredRates = new HashMap<>();
 
@@ -85,6 +172,10 @@ public class FundingArbitrageService {
         List<ArbitrageRates> arbitrageRates = new ArrayList<>();
         List<String> exchanges = new ArrayList<>(filteredRates.keySet());
 
+        // ✅ Передаем OI rankings и max rank
+        final Map<String, Integer> finalOiRankings = oiRankings;
+        int maxRank = fundingConfig.getOi().getMaxRank();
+
         for (int i = 0; i < exchanges.size(); i++) {
             for (int j = i + 1; j < exchanges.size(); j++) {
                 String ex1Name = exchanges.get(i);
@@ -94,7 +185,8 @@ public class FundingArbitrageService {
                 Map<String, Object> ex2Rates = filteredRates.get(ex2Name);
 
                 arbitrageRates.addAll(
-                        findArbitrageOpportunities(ex1Name, ex1Rates, ex2Name, ex2Rates)
+                        findArbitrageOpportunities(ex1Name, ex1Rates, ex2Name, ex2Rates,
+                                finalOiRankings, maxRank)
                 );
             }
         }
@@ -105,6 +197,57 @@ public class FundingArbitrageService {
         return arbitrageRates;
     }
 
+
+//    /**
+//     * Find arbitrage opportunities between two exchanges
+//     */
+//    private List<ArbitrageRates> findArbitrageOpportunities(
+//            String ex1Name,
+//            Map<String, Object> ex1Rates,
+//            String ex2Name,
+//            Map<String, Object> ex2Rates) {
+//
+//        List<ArbitrageRates> opportunities = new ArrayList<>();
+//
+//        ExchangeType ex1Type = parseExchangeType(ex1Name);
+//        ExchangeType ex2Type = parseExchangeType(ex2Name);
+//
+//        if (ex1Type == null || ex2Type == null) {
+//            log.error("[FundingBot] Failed to parse supported exchange: {} or {}",
+//                    ex1Name, ex2Name);
+//            return opportunities;
+//        }
+//
+//        // Find common symbols
+//        for (Map.Entry<String, Object> entry : ex1Rates.entrySet()) {
+//            String symbol = entry.getKey();
+//
+//            if (ex2Rates.containsKey(symbol)) {
+//                double ex1Rate = ((Number) entry.getValue()).doubleValue();
+//                double ex2Rate = ((Number) ex2Rates.get(symbol)).doubleValue();
+//
+//                double arbitrage = Math.abs(ex1Rate - ex2Rate);
+//
+//                String action = buildActionDescription(
+//                        ex1Name, ex1Rate, ex1Type,
+//                        ex2Name, ex2Rate, ex2Type
+//                );
+//
+//                opportunities.add(ArbitrageRates.builder()
+//                        .symbol(symbol)
+//                        .arbitrageRate(arbitrage)
+//                        .firstExchange(ex1Type)
+//                        .secondExchange(ex2Type)
+//                        .firstRate(ex1Rate)
+//                        .secondRate(ex2Rate)
+//                        .action(action)
+//                        .build());
+//            }
+//        }
+//
+//        return opportunities;
+//    }
+
     /**
      * Find arbitrage opportunities between two exchanges
      */
@@ -112,7 +255,9 @@ public class FundingArbitrageService {
             String ex1Name,
             Map<String, Object> ex1Rates,
             String ex2Name,
-            Map<String, Object> ex2Rates) {
+            Map<String, Object> ex2Rates,
+            Map<String, Integer> oiRankings,  // ✅ ДОБАВИЛИ
+            int maxRank) {                     // ✅ ДОБАВИЛИ
 
         List<ArbitrageRates> opportunities = new ArrayList<>();
 
@@ -130,6 +275,24 @@ public class FundingArbitrageService {
             String symbol = entry.getKey();
 
             if (ex2Rates.containsKey(symbol)) {
+
+                //OI filter
+                Integer oiRank = null;
+                if (fundingConfig.getOi().isEnabled()) {
+                    oiRank = oiRankings.get(symbol);
+
+                    if (oiRank == null) {
+                        log.debug("[FundingBot] No OI rank for {}, skipping", symbol);
+                        continue;  // Пропускаем если нет данных
+                    }
+
+                    if (oiRank > maxRank) {
+                        log.debug("[FundingBot] {} OI rank {} > {}, skipping",
+                                symbol, oiRank, maxRank);
+                        continue;  // Пропускаем если rank слишком высокий
+                    }
+                }
+
                 double ex1Rate = ((Number) entry.getValue()).doubleValue();
                 double ex2Rate = ((Number) ex2Rates.get(symbol)).doubleValue();
 
@@ -148,12 +311,14 @@ public class FundingArbitrageService {
                         .firstRate(ex1Rate)
                         .secondRate(ex2Rate)
                         .action(action)
+                        .oiRank(oiRank)
                         .build());
             }
         }
 
         return opportunities;
     }
+
 
     /**
      * Parse exchange name to ExchangeType (only for whitelisted exchanges)
@@ -196,6 +361,17 @@ public class FundingArbitrageService {
 
             ArbitrageRates topRate = arbitrageRates.getFirst();
             double fundingRate = topRate.getArbitrageRate();
+
+            if (topRate.getOiRank() != null) {
+                log.info("[FundingBot] Top pair: {} | Spread: {}bps | OI Rank: #{}",
+                        topRate.getSymbol(),
+                        String.format("%.2f", fundingRate),
+                        topRate.getOiRank());
+            } else {
+                log.info("[FundingBot] Top pair: {} | Spread: {}bps",
+                        topRate.getSymbol(),
+                        String.format("%.2f", fundingRate));
+            }
 
             double minRate = fundingConfig.getThresholds().getSmartModeRate();
 
@@ -299,6 +475,84 @@ public class FundingArbitrageService {
         log.info("Funding rates found");
         return fundingRates;
     }
+
+    /**
+     * Получить полный ответ API (с кэшированием)
+     */
+    private Map<String, Object> getFullApiResponse() {
+        long now = System.currentTimeMillis();
+
+        // Проверяем кэш
+        if (cachedFullResponse != null && (now - lastFetchTime) < CACHE_TTL_MS) {
+            log.debug("[FundingBot] Using cached API response");
+            return cachedFullResponse;
+        }
+
+        try {
+            HttpGet httpGet = new HttpGet(API_URL);
+
+            try (CloseableHttpResponse response = httpClient.execute(httpGet)) {
+                String responseBody = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
+                log.debug("Received response: {}", responseBody);
+
+                cachedFullResponse = objectMapper.readValue(responseBody, Map.class);
+                lastFetchTime = now;
+
+                log.info("[FundingBot] Full API response received and cached");
+                return cachedFullResponse;
+            }
+
+        } catch (Exception e) {
+            log.error("[FundingBot] Failed to get API response", e);
+            return Collections.emptyMap();
+        }
+    }
+
+    /**
+     * Получить oi_rankings из кэшированного ответа
+     */
+    private Map<String, Integer> getOiRankings() {
+        Map<String, Object> fullResponse = getFullApiResponse();
+
+        if (fullResponse.isEmpty()) {
+            log.warn("[FundingBot] Full response is empty");
+            return Collections.emptyMap();
+        }
+
+        Map<String, Object> oiRankingsRaw = (Map<String, Object>) fullResponse.get("oi_rankings");
+
+        if (oiRankingsRaw == null) {
+            log.warn("[FundingBot] No oi_rankings in API response");
+            return Collections.emptyMap();
+        }
+
+        Map<String, Integer> oiRankings = new HashMap<>();
+
+        for (Map.Entry<String, Object> entry : oiRankingsRaw.entrySet()) {
+            String symbol = entry.getKey();
+            Object rankValue = entry.getValue();
+
+            try {
+                int rank;
+                if (rankValue instanceof String) {
+                    String rankStr = (String) rankValue;
+                    // Обработка "500+"
+                    rank = rankStr.contains("+") ? 999 : Integer.parseInt(rankStr);
+                } else {
+                    rank = ((Number) rankValue).intValue();
+                }
+
+                oiRankings.put(symbol, rank);
+
+            } catch (Exception e) {
+                log.debug("[FundingBot] Failed to parse rank for {}: {}", symbol, rankValue);
+            }
+        }
+
+        log.info("[FundingBot] Parsed {} OI rankings", oiRankings.size());
+        return oiRankings;
+    }
+
 }
 
 

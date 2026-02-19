@@ -41,6 +41,7 @@ public class FundingArbitrageService {
     private static final long CACHE_TTL_MS = 60000; // 1 min cache life
 
     private static final Set<String> SUPPORTED_EXCHANGES = Set.of(
+            "lighter",
             "extended",
             "aster"
     );
@@ -54,16 +55,6 @@ public class FundingArbitrageService {
         this.fundingContext = fundingContext;
         this.eventPublisher = eventPublisher;
     }
-
-//    public Map<String, Map<String, Object>> getFundingRates() {
-//        try {
-//            HttpGet httpGet = new HttpGet(API_URL);
-//            return executeRequest(httpGet);
-//        } catch (Exception e) {
-//            log.error("Failed to get funding rates", e);
-//            throw new RuntimeException(e);
-//        }
-//    }
 
     /**
      * Получить funding_rates из кэшированного ответа
@@ -88,52 +79,6 @@ public class FundingArbitrageService {
         return fundingRates;
     }
 
-
-//    public List<ArbitrageRates> calculateArbitrageRates() {
-//        Map<String, Map<String, Object>> fundingRates = getFundingRates();
-//
-//        Map<String, Map<String, Object>> filteredRates = new HashMap<>();
-//
-//        for (Map.Entry<String, Map<String, Object>> entry : fundingRates.entrySet()) {
-//            String exchangeName = entry.getKey().toLowerCase();
-//
-//            if (SUPPORTED_EXCHANGES.contains(exchangeName)) {
-//                filteredRates.put(entry.getKey(), entry.getValue());
-//            }
-//        }
-//
-//        log.info("[FundingBot] Filtered {} supported exchanges from {} total",
-//                filteredRates.size(), fundingRates.size());
-//
-//        if (filteredRates.size() < 2) {
-//            log.warn("[FundingBot] Not enough supported exchanges for arbitrage: {}",
-//                    filteredRates.keySet());
-//            return Collections.emptyList();
-//        }
-//
-//        List<ArbitrageRates> arbitrageRates = new ArrayList<>();
-//        List<String> exchanges = new ArrayList<>(filteredRates.keySet());
-//
-//        for (int i = 0; i < exchanges.size(); i++) {
-//            for (int j = i + 1; j < exchanges.size(); j++) {
-//                String ex1Name = exchanges.get(i);
-//                String ex2Name = exchanges.get(j);
-//
-//                Map<String, Object> ex1Rates = filteredRates.get(ex1Name);
-//                Map<String, Object> ex2Rates = filteredRates.get(ex2Name);
-//
-//                arbitrageRates.addAll(
-//                        findArbitrageOpportunities(ex1Name, ex1Rates, ex2Name, ex2Rates)
-//                );
-//            }
-//        }
-//
-//        // Sort by arbitrage rate
-//        arbitrageRates.sort(Comparator.comparingDouble(ArbitrageRates::getArbitrageRate).reversed());
-//
-//        return arbitrageRates;
-//    }
-
     public List<ArbitrageRates> calculateArbitrageRates() {
         Map<String, Map<String, Object>> fundingRates = getFundingRates();
 
@@ -142,7 +87,6 @@ public class FundingArbitrageService {
             return Collections.emptyList();
         }
 
-        // ✅ Получаем OI rankings (если фильтр включен)
         Map<String, Integer> oiRankings = Collections.emptyMap();
         if (fundingConfig.getOi().isEnabled()) {
             oiRankings = getOiRankings();
@@ -196,57 +140,6 @@ public class FundingArbitrageService {
 
         return arbitrageRates;
     }
-
-
-//    /**
-//     * Find arbitrage opportunities between two exchanges
-//     */
-//    private List<ArbitrageRates> findArbitrageOpportunities(
-//            String ex1Name,
-//            Map<String, Object> ex1Rates,
-//            String ex2Name,
-//            Map<String, Object> ex2Rates) {
-//
-//        List<ArbitrageRates> opportunities = new ArrayList<>();
-//
-//        ExchangeType ex1Type = parseExchangeType(ex1Name);
-//        ExchangeType ex2Type = parseExchangeType(ex2Name);
-//
-//        if (ex1Type == null || ex2Type == null) {
-//            log.error("[FundingBot] Failed to parse supported exchange: {} or {}",
-//                    ex1Name, ex2Name);
-//            return opportunities;
-//        }
-//
-//        // Find common symbols
-//        for (Map.Entry<String, Object> entry : ex1Rates.entrySet()) {
-//            String symbol = entry.getKey();
-//
-//            if (ex2Rates.containsKey(symbol)) {
-//                double ex1Rate = ((Number) entry.getValue()).doubleValue();
-//                double ex2Rate = ((Number) ex2Rates.get(symbol)).doubleValue();
-//
-//                double arbitrage = Math.abs(ex1Rate - ex2Rate);
-//
-//                String action = buildActionDescription(
-//                        ex1Name, ex1Rate, ex1Type,
-//                        ex2Name, ex2Rate, ex2Type
-//                );
-//
-//                opportunities.add(ArbitrageRates.builder()
-//                        .symbol(symbol)
-//                        .arbitrageRate(arbitrage)
-//                        .firstExchange(ex1Type)
-//                        .secondExchange(ex2Type)
-//                        .firstRate(ex1Rate)
-//                        .secondRate(ex2Rate)
-//                        .action(action)
-//                        .build());
-//            }
-//        }
-//
-//        return opportunities;
-//    }
 
     /**
      * Find arbitrage opportunities between two exchanges
@@ -333,6 +226,7 @@ public class FundingArbitrageService {
         return switch (normalized) {
             case "extended" -> ExchangeType.EXTENDED;
             case "aster" -> ExchangeType.ASTER;
+            case "lighter" -> ExchangeType.LIGHTER;
             default -> null;
         };
     }

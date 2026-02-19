@@ -90,36 +90,12 @@ public interface Exchange {
      * Get taker fee
      */
     double getTakerFee();
-//
-//    /**
-//     * Calculate opening fee for notional
-//     */
-//    double calculateOpenFee(double notional);
-//
-//    /**
-//     * Calculate closing fee for notional
-//     */
-//    double calculateCloseFee(double notional);
-//
-//    // ============================================
-//    // VALIDATION
-//    // ============================================
-//
-//    /**
-//     * Validate if exchange is ready for trading
-//     */
-//    boolean isReady();
-//
-//    /**
-//     * Get safety factor for this exchange
-//     */
-//    double getSafetyFactor(String ticker);
 
     Double calculateMaxSizeForMargin(String market, double marginUsd, int leverage, boolean isBuy);
 
     String openPositionWithSize(String market, double size, String direction);
 
-    double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal);
+    double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal, Double prevFunding);
 
     default int getOpenDelay(ExchangeType pairedWith) {
         return 0;

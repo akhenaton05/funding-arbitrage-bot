@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  lighter-service:
+    build: .
+    container_name: lighter-service
+    ports:
+      - "5001:5001"
+    env_file:
+      - .env
+    environment:
+      # Override from .env if needed
+      - LIGHTER_BASE_URL=${LIGHTER_BASE_URL:-https://testnet.zklighter.elliot.ai}
+      - LIGHTER_API_KEY_INDEX=${LIGHTER_API_KEY_INDEX:-3}
+      - LIGHTER_API_PRIVATE_KEY=${LIGHTER_API_PRIVATE_KEY}
+      - LIGHTER_ACCOUNT_INDEX=${LIGHTER_ACCOUNT_INDEX:-0}
+
+      # Proxy
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - http_proxy=${HTTP_PROXY}
+      - https_proxy=${HTTPS_PROXY}
+
+      - PORT=5001
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+    volumes:
+      - ./app.py:/app/app.py:ro
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - lighter-network
+
+networks:
+  lighter-network:
+    driver: bridge

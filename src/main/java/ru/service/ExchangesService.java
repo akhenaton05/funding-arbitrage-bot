@@ -241,7 +241,7 @@ public class ExchangesService {
             }
         }
 
-        if (marginBalance <= 10) {
+        if (marginBalance <= 5) {
             String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
 
@@ -265,6 +265,14 @@ public class ExchangesService {
         if (exchangeOne.getType().equals(ExchangeType.ASTER) || exchangeTwo.getType().equals(ExchangeType.ASTER)) {
             Exchange ast = exchangeOne.getType().equals(ExchangeType.ASTER) ? exchangeOne : exchangeTwo;
             leverage = Math.min(signal.getLeverage(), validateLeverage(signal.getTicker(), ast));
+        }
+
+        //Validation for Lighter leverage
+        if (exchangeOne.getType().equals(ExchangeType.LIGHTER) || exchangeTwo.getType().equals(ExchangeType.LIGHTER)) {
+            Exchange lighter = exchangeOne.getType().equals(ExchangeType.LIGHTER) ? exchangeOne : exchangeTwo;
+            int lighterMaxLeverage = lighter.getMaxLeverage(signal.getTicker());
+            leverage = Math.min(leverage, lighterMaxLeverage);
+            log.info("[FundingBot] Lighter max leverage for {}: {}x", signal.getTicker(), lighterMaxLeverage);
         }
 
         balanceMap.put(positionId, positionBalance);
@@ -308,7 +316,7 @@ public class ExchangesService {
         //Using minimal size
         double targetSize = Math.min(firstExchangeSize, secondExchangeSize);
 
-        //Rounding
+//        //Rounding
         targetSize = Math.floor(targetSize * 100) / 100.0;
 
         log.info("[FundingBot] Delta-neutral sizing: {} max: {}, {} max: {}, Target: {} (using minimum)",
@@ -1195,8 +1203,8 @@ public class ExchangesService {
     private void updateFunding(FundingCloseSignal signal) {
         PositionPnLData pnlData = calculateCurrentPnL(signal);
 
-        double firstExchangeFunding = signal.getFirstExchange().calculateFunding(signal.getTicker(), signal.getFirstPosition().getDirection(), signal);
-        double secondExchangeFunding = signal.getSecondExchange().calculateFunding(signal.getTicker(), signal.getSecondPosition().getDirection(), signal);
+        double firstExchangeFunding = signal.getFirstExchange().calculateFunding(signal.getTicker(), signal.getFirstPosition().getDirection(), signal, pnlData.getFirstFundingNet());
+        double secondExchangeFunding = signal.getSecondExchange().calculateFunding(signal.getTicker(), signal.getSecondPosition().getDirection(), signal, pnlData.getSecondFundingNet());
         log.info("[FundingBot] Got funding fees from both exchanges: {}, {}", firstExchangeFunding, secondExchangeFunding);
 
         pnlData.setFirstFundingNet(firstExchangeFunding);

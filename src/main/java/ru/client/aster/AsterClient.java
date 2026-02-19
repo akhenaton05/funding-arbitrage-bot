@@ -23,6 +23,8 @@ import ru.dto.exchanges.aster.*;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -888,21 +890,33 @@ public class AsterClient implements ExchangeClient {
         try {
             double notional = marginUsd * leverage;
 
-            // Get execution price from book ticker
             Double executionPrice = estimateExecutionPrice(symbol, notional / 1000.0, !isBuy);
 
             if (executionPrice == null) {
-                // Fallback to mark price
                 executionPrice = getMarkPrice(symbol);
                 if (executionPrice <= 0) {
                     log.error("[Aster] Failed to get price for {}", symbol);
                     return null;
                 }
-                log.warn("[Aster] Using mark price as fallback: ${}",
-                        String.format("%.6f", executionPrice));
+                log.warn("[Aster] Using mark price as fallback: ${}", String.format("%.6f", executionPrice));
             }
 
             double maxSize = notional / executionPrice;
+
+            // ✅ ФИКС: применяем stepSize здесь, чтобы вернуть уже выровненный размер
+            SymbolFilter filter = symbolFilters.get(symbol);
+            if (filter != null && filter.getStepSize() != null && !filter.getStepSize().isEmpty()) {
+                try {
+                    BigDecimal bdSize = new BigDecimal(String.valueOf(maxSize));
+                    BigDecimal bdStep = new BigDecimal(filter.getStepSize()); // "0.1" точно, без float ошибок
+                    maxSize = bdSize
+                            .divide(bdStep, 0, RoundingMode.FLOOR)
+                            .multiply(bdStep)
+                            .doubleValue();
+                } catch (Exception e) {
+                    log.warn("[Aster] Failed to apply stepSize for {}: {}", symbol, e.getMessage());
+                }
+            }
 
             log.info("[Aster] Max size for margin ${} @ {}x: {} {} (price: ${})",
                     String.format("%.2f", marginUsd),
@@ -918,6 +932,43 @@ public class AsterClient implements ExchangeClient {
             return null;
         }
     }
+
+
+
+//    public Double calculateMaxSizeForMargin(String symbol, double marginUsd, int leverage, boolean isBuy) {
+//        try {
+//            double notional = marginUsd * leverage;
+//
+//            // Get execution price from book ticker
+//            Double executionPrice = estimateExecutionPrice(symbol, notional / 1000.0, !isBuy);
+//
+//            if (executionPrice == null) {
+//                // Fallback to mark price
+//                executionPrice = getMarkPrice(symbol);
+//                if (executionPrice <= 0) {
+//                    log.error("[Aster] Failed to get price for {}", symbol);
+//                    return null;
+//                }
+//                log.warn("[Aster] Using mark price as fallback: ${}",
+//                        String.format("%.6f", executionPrice));
+//            }
+//
+//            double maxSize = notional / executionPrice;
+//
+//            log.info("[Aster] Max size for margin ${} @ {}x: {} {} (price: ${})",
+//                    String.format("%.2f", marginUsd),
+//                    leverage,
+//                    String.format("%.4f", maxSize),
+//                    symbol.replace("USDT", ""),
+//                    String.format("%.6f", executionPrice));
+//
+//            return maxSize;
+//
+//        } catch (Exception e) {
+//            log.error("[Aster] Error calculating max size for {}", symbol, e);
+//            return null;
+//        }
+//    }
 
     public String placeStopLoss(String symbol, String side, String positionSide, double stopPrice) {
         StringBuilder params = new StringBuilder();

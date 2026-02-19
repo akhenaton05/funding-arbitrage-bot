@@ -241,7 +241,7 @@ public class ExchangesService {
             }
         }
 
-        if (marginBalance <= 5) {
+        if (marginBalance <= 10) {
             String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
 
@@ -316,7 +316,7 @@ public class ExchangesService {
         //Using minimal size
         double targetSize = Math.min(firstExchangeSize, secondExchangeSize);
 
-//        //Rounding
+        //Rounding
         targetSize = Math.floor(targetSize * 100) / 100.0;
 
         log.info("[FundingBot] Delta-neutral sizing: {} max: {}, {} max: {}, Target: {} (using minimum)",

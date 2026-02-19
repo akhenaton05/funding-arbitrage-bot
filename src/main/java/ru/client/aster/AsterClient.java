@@ -42,8 +42,11 @@ public class AsterClient implements ExchangeClient {
     private String privateApiKey;
     private String baseUrl;
 
-    //Filters cache(at the start of the program)
+    // Filters cache (at the start of the program)
     private final Map<String, SymbolFilter> symbolFilters = new HashMap<>();
+
+    // Server time offset for timestamp correction
+    private volatile long serverTimeOffset = 0L;
 
     public AsterClient(CloseableHttpClient httpClient, ObjectMapper objectMapper) {
         this.httpClient = httpClient;
@@ -52,7 +55,22 @@ public class AsterClient implements ExchangeClient {
 
     @PostConstruct
     public void init() {
+        syncServerTime();
         loadSymbolFilters();
+    }
+
+    private void syncServerTime() {
+        try {
+            String json = executePublicGet("/fapi/v1/time", null);
+            if (json == null) return;
+
+            JsonNode node = objectMapper.readTree(json);
+            long serverTime = node.path("serverTime").asLong();
+            serverTimeOffset = serverTime - System.currentTimeMillis();
+            log.info("[Aster] Server time synced, offset: {}ms", serverTimeOffset);
+        } catch (Exception e) {
+            log.warn("[Aster] Failed to sync server time, offset=0", e);
+        }
     }
 
     private void loadSymbolFilters() {
@@ -117,7 +135,6 @@ public class AsterClient implements ExchangeClient {
 
         log.info("[Aster] setLeverage response for {}: {}", symbol, response);
 
-        //Checking status response
         if (response != null && !response.isEmpty()) {
             try {
                 JsonNode node = objectMapper.readTree(response);
@@ -131,11 +148,10 @@ public class AsterClient implements ExchangeClient {
                 log.warn("[Aster] Failed to parse setLeverage response", e);
             }
         }
-
         return response;
     }
 
-    //Generate signature for the query
+    // Generate signature for the query
     private String sign(String queryString) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
@@ -149,13 +165,13 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    //Adding signature to the request and executing, returns plain body
+    // Adding signature to the request and executing, returns plain body
     private String executeSignedRequest(String method, String endpoint, String queryParams) {
         try {
-            long timestamp = System.currentTimeMillis();
+            long timestamp = System.currentTimeMillis() + serverTimeOffset; // ✅ скорректированный timestamp
             String query = (queryParams != null && !queryParams.isEmpty())
-                    ? queryParams + "&recvWindow=5000&timestamp=" + timestamp
-                    : "recvWindow=5000&timestamp=" + timestamp;
+                    ? queryParams + "&recvWindow=10000&timestamp=" + timestamp  // ✅ увеличили до 10000
+                    : "recvWindow=10000&timestamp=" + timestamp;
 
             String signature = sign(query);
             String fullQuery = query + "&signature=" + signature;
@@ -195,8 +211,7 @@ public class AsterClient implements ExchangeClient {
     @Override
     public Double getBalance() {
         try {
-            String queryParams = "recvWindow=5000"; //Reply attack defense
-            String json = executeSignedRequest("GET", "/fapi/v2/balance", queryParams);
+            String json = executeSignedRequest("GET", "/fapi/v2/balance", null); // ✅ убрали лишний recvWindow
             if (Objects.isNull(json)) return 0.0;
 
             JsonNode root = objectMapper.readTree(json);
@@ -241,7 +256,6 @@ public class AsterClient implements ExchangeClient {
 
             OrderResponse response = objectMapper.readValue(responseBody, OrderResponse.class);
 
-            //Getting orderId or clientOrderId
             String orderId = null;
             if (response.getOrderId() != null) {
                 orderId = String.valueOf(response.getOrderId());
@@ -261,7 +275,6 @@ public class AsterClient implements ExchangeClient {
                     response.getOrigQty(),
                     response.getAvgPrice());
 
-            //Status checking
             if ("FILLED".equals(response.getStatus()) || "PARTIALLY_FILLED".equals(response.getStatus())) {
                 log.info("[Aster] Order execution confirmed");
             } else if ("NEW".equals(response.getStatus())) {
@@ -275,7 +288,6 @@ public class AsterClient implements ExchangeClient {
         } catch (RuntimeException e) {
             log.error("[Aster] Market order API error", e);
             return null;
-
         } catch (Exception e) {
             log.error("[Aster] Failed to parse order response", e);
             return null;
@@ -299,14 +311,12 @@ public class AsterClient implements ExchangeClient {
         }
 
         try {
-            //Balance validation
             double available = getBalance();
             if (available < usdMargin) {
                 log.warn("[Aster] Insufficient balance: ${} < ${}", available, usdMargin);
                 return null;
             }
 
-            //Get ticker filters (stepSize, minQty, minNotional)
             SymbolFilter filter = symbolFilters.get(symbol);
             if (filter == null || filter.getStepSize() == null || filter.getStepSize().isEmpty()) {
                 log.warn("[Aster] Empty stepSize for {}", symbol);
@@ -331,14 +341,12 @@ public class AsterClient implements ExchangeClient {
                 minNotional = Double.parseDouble(filter.getMinNotional());
             }
 
-            //Get mark price
             double price = getMarkPrice(symbol);
             if (price <= 0) {
                 log.error("[Aster] Failed to get mark price for {}", symbol);
                 return null;
             }
 
-            //Calculate notional (margin * leverage)
             double notional = usdMargin * leverage;
 
             if (notional < minNotional) {
@@ -347,7 +355,6 @@ public class AsterClient implements ExchangeClient {
                 return null;
             }
 
-            //Calculate quantity
             double qty = notional / price;
             double qtyRounded = Math.floor(qty / step) * step;
 
@@ -365,13 +372,10 @@ public class AsterClient implements ExchangeClient {
             log.info("[Aster] Opening {}: margin ${}, ×{}, qty={}, notional ${}, price ~{}",
                     direction, usdMargin, leverage, quantityStr, notional, price);
 
-            //Set leverage
             setLeverage(symbol, leverage);
 
-            //Open market order
             String orderId = openMarketOrder(symbol, side, Double.parseDouble(quantityStr), positionSide);
 
-            //Checking result
             if (orderId == null) {
                 log.error("[Aster] Failed to open market order");
                 return null;
@@ -382,7 +386,7 @@ public class AsterClient implements ExchangeClient {
             }
 
             log.info("[Aster] Position opened: orderId={}", orderId);
-            return orderId; //Returning orderId
+            return orderId;
 
         } catch (Exception e) {
             log.error("[Aster] Error opening position for ${} with ×{}", usdMargin, leverage, e);
@@ -392,7 +396,6 @@ public class AsterClient implements ExchangeClient {
 
     public double getMarkPrice(String symbol) {
         try {
-            // Public endpoint with no signature
             URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/ticker/price");
             builder.addParameter("symbol", symbol);
             URI uri = builder.build();
@@ -441,7 +444,6 @@ public class AsterClient implements ExchangeClient {
 
     public OrderResult closePosition(String symbol) {
         try {
-            //Getting positions
             List<AsterPosition> positions = getPositions(symbol);
 
             if (Objects.isNull(positions) || positions.isEmpty()) {
@@ -454,7 +456,6 @@ public class AsterClient implements ExchangeClient {
                         .build();
             }
 
-            //Choosing active position
             AsterPosition targetPos = null;
             for (AsterPosition pos : positions) {
                 double amt = Double.parseDouble(pos.getPositionAmt());
@@ -479,7 +480,6 @@ public class AsterClient implements ExchangeClient {
             String closeSide = amt > 0 ? "SELL" : "BUY";
             String qty = String.format(Locale.US, "%.3f", Math.abs(amt));
 
-            //Sending marker close for the position
             StringBuilder params = new StringBuilder();
             params.append("symbol=").append(symbol);
             params.append("&side=").append(closeSide);
@@ -492,7 +492,6 @@ public class AsterClient implements ExchangeClient {
 
             String result = executeSignedRequest("POST", "/fapi/v1/order", params.toString());
 
-            //Waiting till closing
             log.info("[Aster] Close order sent, validating position closure...");
 
             boolean closed = waitPositionClosed(symbol, positionSide, 10.0);
@@ -524,7 +523,7 @@ public class AsterClient implements ExchangeClient {
 
     private boolean waitPositionClosed(String symbol, String positionSide, double timeoutSec) {
         long start = System.currentTimeMillis();
-        long pollInterval = 300; // 300ms
+        long pollInterval = 300;
 
         while ((System.currentTimeMillis() - start) / 1000.0 < timeoutSec) {
             try {
@@ -751,9 +750,8 @@ public class AsterClient implements ExchangeClient {
                     size <= availableQty
             );
 
-            //Если размер больше доступной ликвидности - добавляем penalty
             if (size > availableQty) {
-                double penalty = isSell ? 0.998 : 1.002; // 0.2% penalty
+                double penalty = isSell ? 0.998 : 1.002;
                 price = price * penalty;
                 log.warn("[Aster] Insufficient liquidity at best price, applying {}% penalty",
                         (Math.abs(1 - penalty) * 100));
@@ -786,13 +784,11 @@ public class AsterClient implements ExchangeClient {
             log.info("[Aster] Opening position by size: symbol={}, size={}, direction={}",
                     symbol, String.format("%.4f", size), direction);
 
-            // Validate size
             if (size <= 0) {
                 log.error("[Aster] Invalid size: {}", size);
                 return null;
             }
 
-            // Get filters
             SymbolFilter filter = symbolFilters.get(symbol);
             if (filter == null || filter.getStepSize() == null || filter.getStepSize().isEmpty()) {
                 log.warn("[Aster] Empty stepSize for {}, loading...", symbol);
@@ -823,7 +819,6 @@ public class AsterClient implements ExchangeClient {
                 minNotional = Double.parseDouble(filter.getMinNotional());
             }
 
-            // Round size to step
             double qtyRounded = Math.floor(size / step) * step;
 
             if (qtyRounded < minQty) {
@@ -840,7 +835,6 @@ public class AsterClient implements ExchangeClient {
                 }
             }
 
-            // Validate notional
             double price = getMarkPrice(symbol);
             if (price <= 0) {
                 log.error("[Aster] Failed to get mark price for {}", symbol);
@@ -856,7 +850,6 @@ public class AsterClient implements ExchangeClient {
                 return null;
             }
 
-            // Format quantity string
             String quantityStr = String.format(Locale.US, "%." + getPrecision(step) + "f", qtyRounded);
 
             log.info("[Aster] Position params: size={}, price=${}, notional=${}, step_size={}",
@@ -865,7 +858,6 @@ public class AsterClient implements ExchangeClient {
                     String.format("%.2f", notional),
                     step);
 
-            // Open market order
             String orderId = openMarketOrder(symbol, side, Double.parseDouble(quantityStr), positionSide);
 
             if (orderId == null) {
@@ -903,12 +895,11 @@ public class AsterClient implements ExchangeClient {
 
             double maxSize = notional / executionPrice;
 
-            // ✅ ФИКС: применяем stepSize здесь, чтобы вернуть уже выровненный размер
             SymbolFilter filter = symbolFilters.get(symbol);
             if (filter != null && filter.getStepSize() != null && !filter.getStepSize().isEmpty()) {
                 try {
                     BigDecimal bdSize = new BigDecimal(String.valueOf(maxSize));
-                    BigDecimal bdStep = new BigDecimal(filter.getStepSize()); // "0.1" точно, без float ошибок
+                    BigDecimal bdStep = new BigDecimal(filter.getStepSize());
                     maxSize = bdSize
                             .divide(bdStep, 0, RoundingMode.FLOOR)
                             .multiply(bdStep)
@@ -932,43 +923,6 @@ public class AsterClient implements ExchangeClient {
             return null;
         }
     }
-
-
-
-//    public Double calculateMaxSizeForMargin(String symbol, double marginUsd, int leverage, boolean isBuy) {
-//        try {
-//            double notional = marginUsd * leverage;
-//
-//            // Get execution price from book ticker
-//            Double executionPrice = estimateExecutionPrice(symbol, notional / 1000.0, !isBuy);
-//
-//            if (executionPrice == null) {
-//                // Fallback to mark price
-//                executionPrice = getMarkPrice(symbol);
-//                if (executionPrice <= 0) {
-//                    log.error("[Aster] Failed to get price for {}", symbol);
-//                    return null;
-//                }
-//                log.warn("[Aster] Using mark price as fallback: ${}",
-//                        String.format("%.6f", executionPrice));
-//            }
-//
-//            double maxSize = notional / executionPrice;
-//
-//            log.info("[Aster] Max size for margin ${} @ {}x: {} {} (price: ${})",
-//                    String.format("%.2f", marginUsd),
-//                    leverage,
-//                    String.format("%.4f", maxSize),
-//                    symbol.replace("USDT", ""),
-//                    String.format("%.6f", executionPrice));
-//
-//            return maxSize;
-//
-//        } catch (Exception e) {
-//            log.error("[Aster] Error calculating max size for {}", symbol, e);
-//            return null;
-//        }
-//    }
 
     public String placeStopLoss(String symbol, String side, String positionSide, double stopPrice) {
         StringBuilder params = new StringBuilder();

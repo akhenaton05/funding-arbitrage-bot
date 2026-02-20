@@ -7,7 +7,7 @@ import lombok.Data;
 @Data
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class LighterMarket {
-    private String symbol;           // "ETH", "BTC", "SOL"
+    private String symbol;
     
     @JsonProperty("market_id")
     private Integer marketId;

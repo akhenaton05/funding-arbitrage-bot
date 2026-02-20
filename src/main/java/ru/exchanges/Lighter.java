@@ -56,16 +56,16 @@ public class Lighter implements Exchange {
                 .build();
     }
 
-@Override
-public OrderBook getOrderBook(String symbol) {
-    try {
-        LighterOrderBookResponse orderBook = lighterClient.getOrderBook(formatSymbol(symbol));
-        return LighterOrderBookMapper.toOrderBook(orderBook, symbol);
-    } catch (Exception e) {
-        log.error("[Lighter] Error getting Orderbook for {}", symbol, e);
-        return null;
+    @Override
+    public OrderBook getOrderBook(String symbol) {
+        try {
+            LighterOrderBookResponse orderBook = lighterClient.getOrderBook(formatSymbol(symbol));
+            return LighterOrderBookMapper.toOrderBook(orderBook, symbol);
+        } catch (Exception e) {
+            log.error("[Lighter] Error getting Orderbook for {}", symbol, e);
+            return null;
+        }
     }
-}
 
     @Override
     public List<Position> getPositions(String symbol, Direction side) {
@@ -75,11 +75,6 @@ public OrderBook getOrderBook(String symbol) {
             result.add(LighterPositionMapper.toPosition(pos));
         }
         return result;
-    }
-
-    @Override
-    public boolean hasPosition(String symbol, Direction side) {
-        return false;
     }
 
     @Override
@@ -158,6 +153,24 @@ public OrderBook getOrderBook(String symbol) {
     }
 
     @Override
+    public int getOpenDelay(ExchangeType pairedWith) {
+        return switch (pairedWith) {
+            case ASTER -> 0;  // Wait 0s for Aster to close
+            case EXTENDED -> 0;   // Wait 0s for Extended to close
+            default -> 0;
+        };
+    }
+
+    @Override
+    public int getCloseDelay(ExchangeType pairedWith) {
+        return switch (pairedWith) {
+            case ASTER -> 0;  // Wait 0s for Aster to close
+            case EXTENDED -> 0;   // Wait 0s for Extended to close
+            default -> 0;
+        };
+    }
+
+    @Override
     public void setPairedExchange(ExchangeType pairedWith) {
         currentPairedExchange = pairedWith;
     }
@@ -170,10 +183,6 @@ public OrderBook getOrderBook(String symbol) {
     @Override
     public String placeTakeProfit(String symbol, Direction direction, double tpPrice) {
         return "";
-    }
-
-    @Override
-    public void cancelAllOrders(String symbol) {
     }
 
     @Override

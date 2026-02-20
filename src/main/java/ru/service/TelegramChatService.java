@@ -22,6 +22,7 @@ import ru.dto.funding.HoldingMode;
 import ru.dto.funding.PositionPnLData;
 import ru.event.FundingAlertEvent;
 import ru.event.PnLThresholdEvent;
+import ru.event.PositionUpdateEvent;
 import ru.utils.FundingArbitrageContext;
 
 import java.time.Duration;
@@ -82,7 +83,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
             case "/trades" -> getTrades(chatId);
             case "/close" -> closePositionById(chatId, parts);
             case "/closeall" -> closeAllPositions();
-            case "/pospnl" -> calculatePositionPnl(chatId, parts);
+            case "/pnl" -> calculatePositionPnl(chatId, parts);
         }
     }
 
@@ -259,6 +260,18 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
     }
 
+    @EventListener
+    @Async
+    public void handlePnLThreshold(PositionUpdateEvent event) {
+        log.info("[Telegram] Position event for {}", event.getPositionId());
+
+        String message = formatPositionEvent(event);
+
+        for (Long chatId : fundingContext.getSubscriberIds()) {
+            sendMessage(chatId, message);
+        }
+    }
+
     private void getTrades(Long chatId) {
         log.info("[Telegram] Got trades history request");
 
@@ -319,7 +332,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
             }
         }
 
-        // Summary
+        //Summary
         if (wins + losses > 0) {
             String summaryEmoji = totalPnL >= 0 ? "🟢" : "🔴";
             String sign = totalPnL >= 0 ? "+" : "";
@@ -456,7 +469,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         sb.append("*Gross P&L:* ").append(formatMoney(pnlData.getGrossPnl())).append("\n");
         sb.append("*Funding:* ").append(formatMoney(pnlData.getTotalFundingNet())).append("\n");
-        sb.append("*Fees:* -").append(String.format("%.4f USD", pnlData.getTotalOpenFees() + pnlData.getTotalCloseFees())).append("\n\n");
 
         double netPnl = pnlData.getNetPnl();
         String sign = netPnl >= 0 ? "+" : "";
@@ -481,6 +493,22 @@ public class TelegramChatService extends TelegramLongPollingBot {
                 event.getPositionId(),
                 event.getTicker(),
                 event.getThresholdPercent(),
+                pnl.getNetPnl()
+        );
+    }
+
+    private String formatPositionEvent(PositionUpdateEvent event) {
+        PositionPnLData pnl = event.getPnlData();
+
+        return String.format(
+                "🤖 *FundingBot:* Position Update \uD83D\uDCCC\n\n" +
+                        "*ID:* `%s`\n" +
+                        "*Ticker:* %s\n" +
+                        "*Message:* %s\n" +
+                        "*P&L:* $%.2f\n",
+                event.getPositionId(),
+                event.getTicker(),
+                event.getMessage(),
                 pnl.getNetPnl()
         );
     }

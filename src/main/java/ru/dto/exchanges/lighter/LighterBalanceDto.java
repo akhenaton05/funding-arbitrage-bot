@@ -20,11 +20,6 @@ public class LighterBalanceDto {
 
         private String equity;
 
-        // Fallback методы на случай null
-        public String getTotal() {
-            return total != null ? total : "0";
-        }
-
         public String getAvailableForTrade() {
             return availableForTrade != null ? availableForTrade : "0";
         }

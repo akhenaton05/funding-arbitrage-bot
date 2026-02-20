@@ -5,7 +5,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import ru.client.lighter.LighterClient;
-import ru.dto.exchanges.*;
 import ru.dto.exchanges.lighter.*;
 import ru.exchanges.Lighter;
 

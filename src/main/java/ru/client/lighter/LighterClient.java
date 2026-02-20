@@ -6,7 +6,6 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
-import ru.client.ExchangeClient;
 import ru.dto.exchanges.ExchangeType;
 import ru.dto.exchanges.OrderResult;
 import ru.dto.exchanges.lighter.*;
@@ -26,7 +25,7 @@ import java.util.Map;
 @Setter
 @Component
 @ConfigurationProperties(prefix = "exchanges.lighter")
-public class LighterClient implements ExchangeClient {
+public class LighterClient {
 
     private final ObjectMapper objectMapper;
     private final HttpClient localHttpClient = HttpClient.newBuilder()
@@ -39,9 +38,9 @@ public class LighterClient implements ExchangeClient {
         this.objectMapper = objectMapper;
     }
 
-    // ============================================
-    // MARKETS
-    // ============================================
+    /**
+     * Utils
+     */
 
     public List<LighterMarket> getMarkets() {
         String url = baseUrl + "/markets";
@@ -73,11 +72,6 @@ public class LighterClient implements ExchangeClient {
         }
     }
 
-    // ============================================
-    // BALANCE
-    // ============================================
-
-    @Override
     public Double getBalance() {
         String url = baseUrl + "/balance";
 
@@ -170,9 +164,9 @@ public class LighterClient implements ExchangeClient {
         }
     }
 
-    // ============================================
-    // LEVERAGE
-    // ============================================
+    /**
+     * Leverage
+     */
 
     public String setLeverage(String market, int leverage) {
         String url = baseUrl + "/user/leverage";
@@ -222,14 +216,10 @@ public class LighterClient implements ExchangeClient {
         }
     }
 
-    // ============================================
-    // OPEN POSITION
-    // ============================================
-
     /**
-     * ✅ Открывает рыночную позицию
-     * Python сам обработает size и leverage
+     * Open\Close\View position
      */
+
     public String openMarketPosition(String market, String side, double size) {
         String url = baseUrl + "/order/market";
 
@@ -277,9 +267,6 @@ public class LighterClient implements ExchangeClient {
         }
     }
 
-    /**
-     * ✅ Открывает позицию по размеру
-     */
     public String openPositionWithSize(String market, double size, String direction) {
         String side = direction.equalsIgnoreCase("LONG") ? "BUY" : "SELL";
 
@@ -293,19 +280,12 @@ public class LighterClient implements ExchangeClient {
         return openMarketPosition(market, side, size);
     }
 
-    /**
-     * ✅ Открывает позицию с фиксированным margin (НЕ РАБОТАЕТ БЕЗ ЦЕНЫ)
-     */
     public String openPositionWithFixedMargin(String market, double marginUsd,
                                               int leverage, String direction) {
         log.warn("[Lighter] openPositionWithFixedMargin requires price endpoint");
         log.warn("[Lighter] Use openPositionWithSize instead");
         return null;
     }
-
-    // ============================================
-    // CLOSE POSITION
-    // ============================================
 
     public String closePosition(String market, String currentSide) {
         String url = baseUrl + "/positions/close";
@@ -378,10 +358,6 @@ public class LighterClient implements ExchangeClient {
                 .build();
     }
 
-    // ============================================
-    // POSITIONS
-    // ============================================
-
     public List<LighterPosition> getPositions(String market, String side) {
         StringBuilder url = new StringBuilder(baseUrl + "/positions");
 
@@ -423,10 +399,9 @@ public class LighterClient implements ExchangeClient {
         }
     }
 
-    // ============================================
-    // FUNDING
-    // ============================================
-
+    /**
+     * Funding
+     */
 
     public Double getAccumulatedFunding(String market, long openTimeMs) {
         String url = baseUrl + "/funding/payments"
@@ -466,7 +441,6 @@ public class LighterClient implements ExchangeClient {
         }
     }
 
-    // ✅ Перегрузка для обратной совместимости
     public Double getAccumulatedFunding(String market) {
         return getAccumulatedFunding(market, 0L);
     }
@@ -509,13 +483,53 @@ public class LighterClient implements ExchangeClient {
     }
 
 
+    public int getMaxLeverage(String symbol) {
+        String url = baseUrl + "/market/" + symbol + "/max-leverage";
 
-// ORDERBOOK METHODS
-// ============================================
+        try {
+            log.info("[Lighter] Getting max leverage for {}", symbol);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = localHttpClient.send(request,
+                    HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                log.warn("[Lighter] Max leverage HTTP error: {}, using default 3x", response.statusCode());
+                return 3;
+            }
+
+            JsonNode root = objectMapper.readTree(response.body());
+
+            if (!"OK".equals(root.path("status").asText())) {
+                log.warn("[Lighter] Max leverage request failed, using default 3x");
+                return 3;
+            }
+
+            int maxLeverage = root.path("max_leverage").asInt(3);
+            String source = root.path("source").asText("unknown");
+
+            log.info("[Lighter] Max leverage for {}: {}x (source: {})", symbol, maxLeverage, source);
+
+            return maxLeverage;
+
+        } catch (IOException | InterruptedException e) {
+            log.error("[Lighter] Exception getting max leverage for {}, using default 3x", symbol, e);
+            return 3;
+        } catch (Exception e) {
+            log.error("[Lighter] Unexpected error getting max leverage for {}, using default 3x", symbol, e);
+            return 3;
+        }
+    }
 
     /**
-     * Получить orderbook для рынка
+     * OrderBook
      */
+
     public LighterOrderBookResponse getOrderBook(String market, int limit) {
         String url = baseUrl + "/market/" + market + "/orderbook?limit=" + limit;
 
@@ -556,16 +570,10 @@ public class LighterClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Получить orderbook с лимитом по умолчанию (10)
-     */
     public LighterOrderBookResponse getOrderBook(String market) {
         return getOrderBook(market, 10);
     }
 
-    /**
-     * Получить только best bid/ask
-     */
     public LighterBestPricesResponse getBestPrices(String market) {
         String url = baseUrl + "/market/" + market + "/best-prices";
 
@@ -602,9 +610,6 @@ public class LighterClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Получить глубину рынка с анализом
-     */
     public LighterDepthResponse getMarketDepth(String market, int limit) {
         String url = baseUrl + "/market/" + market + "/depth?limit=" + limit;
 
@@ -643,9 +648,6 @@ public class LighterClient implements ExchangeClient {
         }
     }
 
-    /**
-     * Получить глубину с лимитом по умолчанию (20)
-     */
     public LighterDepthResponse getMarketDepth(String market) {
         return getMarketDepth(market, 20);
     }
@@ -699,50 +701,4 @@ public class LighterClient implements ExchangeClient {
             return null;
         }
     }
-
-    public int getMaxLeverage(String symbol) {
-        String url = baseUrl + "/market/" + symbol + "/max-leverage";
-
-        try {
-            log.info("[Lighter] Getting max leverage for {}", symbol);
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(10))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = localHttpClient.send(request,
-                    HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() != 200) {
-                log.warn("[Lighter] Max leverage HTTP error: {}, using default 5x", response.statusCode());
-                return 5;  // Conservative default
-            }
-
-            JsonNode root = objectMapper.readTree(response.body());
-
-            if (!"OK".equals(root.path("status").asText())) {
-                log.warn("[Lighter] Max leverage request failed, using default 5x");
-                return 5;
-            }
-
-            int maxLeverage = root.path("max_leverage").asInt(5);
-            String source = root.path("source").asText("unknown");
-
-            log.info("[Lighter] Max leverage for {}: {}x (source: {})", symbol, maxLeverage, source);
-
-            return maxLeverage;
-
-        } catch (IOException | InterruptedException e) {
-            log.error("[Lighter] Exception getting max leverage for {}, using default 5x", symbol, e);
-            return 5;  // Conservative default
-        } catch (Exception e) {
-            log.error("[Lighter] Unexpected error getting max leverage for {}, using default 5x", symbol, e);
-            return 5;
-        }
-    }
-
-
-
 }

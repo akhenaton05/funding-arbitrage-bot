@@ -46,11 +46,6 @@ public class Extended implements Exchange{
     }
 
     @Override
-    public void cancelAllOrders(String symbol) {
-
-    }
-
-    @Override
     public boolean supportsSlTp() {
         return false;
     }
@@ -58,8 +53,8 @@ public class Extended implements Exchange{
     @Override
     public int getOpenDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
-            case ASTER -> 0;  // Wait 4s for Extended to open
-            case LIGHTER -> 0;   // Wait 3s for Lighter to open
+            case ASTER -> 0;  // Wait 0s for Extended to open
+            case LIGHTER -> 0;   // Wait 0s for Lighter to open
             default -> 0;
         };
     }
@@ -68,7 +63,7 @@ public class Extended implements Exchange{
     public int getCloseDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
             case ASTER -> 0;  // Wait 3s for Extended to close
-            case LIGHTER -> 0;   // Wait 3.5s for Lighter to close
+            case LIGHTER -> 0;   // Wait 0s for Lighter to close
             default -> 0;
         };
     }
@@ -112,11 +107,6 @@ public class Extended implements Exchange{
             positions.add(ExtendedPositionMapper.toPosition(pos));
         }
         return positions;
-    }
-
-    @Override
-    public boolean hasPosition(String symbol, Direction side) {
-        return false;
     }
 
     @Override

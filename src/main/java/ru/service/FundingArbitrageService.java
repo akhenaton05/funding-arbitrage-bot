@@ -56,9 +56,76 @@ public class FundingArbitrageService {
         this.eventPublisher = eventPublisher;
     }
 
-    /**
-     * Получить funding_rates из кэшированного ответа
-     */
+    @Scheduled(cron = "0 54 * * * *")
+    private void fundingTracker() {
+        try {
+            List<ArbitrageRates> arbitrageRates = calculateArbitrageRates();
+
+            if (arbitrageRates.isEmpty()) {
+                log.warn("[FundingBot] No arbitrage rates calculated");
+                return;
+            }
+
+            ArbitrageRates topRate = arbitrageRates.getFirst();
+            double fundingRate = topRate.getArbitrageRate();
+
+            if (topRate.getOiRank() != null) {
+                log.info("[FundingBot] Top pair: {} | Spread: {}bps | OI Rank: #{}",
+                        topRate.getSymbol(),
+                        String.format("%.2f", fundingRate),
+                        topRate.getOiRank());
+            } else {
+                log.info("[FundingBot] Top pair: {} | Spread: {}bps",
+                        topRate.getSymbol(),
+                        String.format("%.2f", fundingRate));
+            }
+
+            double minRate = fundingConfig.getThresholds().getSmartModeRate();
+
+            if (fundingRate < minRate) {
+                log.info("[FundingBot] Skipping {}: {}bps < {}bps (min threshold)",
+                        topRate.getSymbol(), fundingRate, minRate);
+                return;
+            }
+
+            //Mode selecting
+            double fastThreshold = fundingConfig.getThresholds().getFastModeRate();
+            HoldingMode selectedMode;
+            int leverage;
+
+            if (fundingRate >= fastThreshold) {
+                //Fast Mode: >= 150 bps
+                selectedMode = HoldingMode.FAST_MODE;
+                leverage = fundingConfig.getFast().getLeverage();
+
+                log.info("[FundingBot] FastMode selected: {}bps >= {}bps",
+                        fundingRate, fastThreshold);
+                log.info("[FundingBot] Opening {} with {}x leverage (close after funding rate received)",
+                        topRate.getSymbol(), leverage);
+            } else {
+                //Smart Mode: 50-149 bps
+                selectedMode = HoldingMode.SMART_MODE;
+                leverage = fundingConfig.getSmart().getLeverage();
+
+                log.info("[FundingBot] SmartMode selected: {}bps < {}bps",
+                        fundingRate, fastThreshold);
+                log.info("[FundingBot] Opening {} with {}x leverage (hold until unprofitable)",
+                        topRate.getSymbol(), leverage);
+            }
+
+            //Sending event to listeners
+            for (Long chatId : fundingContext.getSubscriberIds()) {
+                eventPublisher.publishEvent(new FundingAlertEvent(chatId, topRate, selectedMode, leverage));
+
+                FundingOpenSignal signal = convertToSignal(topRate, selectedMode, leverage, fundingRate);
+                eventPublisher.publishEvent(new NewArbitrageEvent(signal));
+            }
+
+        } catch (Exception e) {
+            log.error("[FundingBot] Error in funding tracker", e);
+        }
+    }
+
     public Map<String, Map<String, Object>> getFundingRates() {
         Map<String, Object> fullResponse = getFullApiResponse();
 
@@ -116,7 +183,6 @@ public class FundingArbitrageService {
         List<ArbitrageRates> arbitrageRates = new ArrayList<>();
         List<String> exchanges = new ArrayList<>(filteredRates.keySet());
 
-        // ✅ Передаем OI rankings и max rank
         final Map<String, Integer> finalOiRankings = oiRankings;
         int maxRank = fundingConfig.getOi().getMaxRank();
 
@@ -135,22 +201,19 @@ public class FundingArbitrageService {
             }
         }
 
-        // Sort by arbitrage rate
+        //Sort by arbitrage rate
         arbitrageRates.sort(Comparator.comparingDouble(ArbitrageRates::getArbitrageRate).reversed());
 
         return arbitrageRates;
     }
 
-    /**
-     * Find arbitrage opportunities between two exchanges
-     */
     private List<ArbitrageRates> findArbitrageOpportunities(
             String ex1Name,
             Map<String, Object> ex1Rates,
             String ex2Name,
             Map<String, Object> ex2Rates,
-            Map<String, Integer> oiRankings,  // ✅ ДОБАВИЛИ
-            int maxRank) {                     // ✅ ДОБАВИЛИ
+            Map<String, Integer> oiRankings,
+            int maxRank) {
 
         List<ArbitrageRates> opportunities = new ArrayList<>();
 
@@ -163,7 +226,7 @@ public class FundingArbitrageService {
             return opportunities;
         }
 
-        // Find common symbols
+        //Find common symbols
         for (Map.Entry<String, Object> entry : ex1Rates.entrySet()) {
             String symbol = entry.getKey();
 
@@ -176,13 +239,13 @@ public class FundingArbitrageService {
 
                     if (oiRank == null) {
                         log.debug("[FundingBot] No OI rank for {}, skipping", symbol);
-                        continue;  // Пропускаем если нет данных
+                        continue;
                     }
 
                     if (oiRank > maxRank) {
                         log.debug("[FundingBot] {} OI rank {} > {}, skipping",
                                 symbol, oiRank, maxRank);
-                        continue;  // Пропускаем если rank слишком высокий
+                        continue;
                     }
                 }
 
@@ -212,10 +275,6 @@ public class FundingArbitrageService {
         return opportunities;
     }
 
-
-    /**
-     * Parse exchange name to ExchangeType (only for whitelisted exchanges)
-     */
     private ExchangeType parseExchangeType(String exchangeName) {
         if (exchangeName == null) {
             return null;
@@ -240,76 +299,6 @@ public class FundingArbitrageService {
             return String.format("LONG %s, SHORT %s", ex1Name, ex2Name);
         } else {
             return String.format("SHORT %s, LONG %s", ex1Name, ex2Name);
-        }
-    }
-
-    @Scheduled(cron = "0 54 * * * *")
-    private void fundingTracker() {
-        try {
-            List<ArbitrageRates> arbitrageRates = calculateArbitrageRates();
-
-            if (arbitrageRates.isEmpty()) {
-                log.warn("[FundingBot] No arbitrage rates calculated");
-                return;
-            }
-
-            ArbitrageRates topRate = arbitrageRates.getFirst();
-            double fundingRate = topRate.getArbitrageRate();
-
-            if (topRate.getOiRank() != null) {
-                log.info("[FundingBot] Top pair: {} | Spread: {}bps | OI Rank: #{}",
-                        topRate.getSymbol(),
-                        String.format("%.2f", fundingRate),
-                        topRate.getOiRank());
-            } else {
-                log.info("[FundingBot] Top pair: {} | Spread: {}bps",
-                        topRate.getSymbol(),
-                        String.format("%.2f", fundingRate));
-            }
-
-            double minRate = fundingConfig.getThresholds().getSmartModeRate();
-
-            if (fundingRate < minRate) {
-                log.info("[FundingBot] Skipping {}: {}bps < {}bps (min threshold)",
-                        topRate.getSymbol(), fundingRate, minRate);
-                return;
-            }
-
-            //Mode selecting
-            double fastThreshold = fundingConfig.getThresholds().getFastModeRate();
-            HoldingMode selectedMode;
-            int leverage;
-
-            if (fundingRate >= fastThreshold) {
-                // Fast Mode: >= 150 bps
-                selectedMode = HoldingMode.FAST_MODE;
-                leverage = fundingConfig.getFast().getLeverage();
-
-                log.info("[FundingBot] FastMode selected: {}bps >= {}bps",
-                        fundingRate, fastThreshold);
-                log.info("[FundingBot] Opening {} with {}x leverage (close after funding rate received)",
-                        topRate.getSymbol(), leverage);
-            } else {
-                // Smart Mode: 50-149 bps
-                selectedMode = HoldingMode.SMART_MODE;
-                leverage = fundingConfig.getSmart().getLeverage();
-
-                log.info("[FundingBot] SmartMode selected: {}bps < {}bps",
-                        fundingRate, fastThreshold);
-                log.info("[FundingBot] Opening {} with {}x leverage (hold until unprofitable)",
-                        topRate.getSymbol(), leverage);
-            }
-
-            //Sending event to listeners
-            for (Long chatId : fundingContext.getSubscriberIds()) {
-                eventPublisher.publishEvent(new FundingAlertEvent(chatId, topRate, selectedMode, leverage));
-
-                FundingOpenSignal signal = convertToSignal(topRate, selectedMode, leverage, fundingRate);
-                eventPublisher.publishEvent(new NewArbitrageEvent(signal));
-            }
-
-        } catch (Exception e) {
-            log.error("[FundingBot] Error in funding tracker", e);
         }
     }
 
@@ -370,13 +359,9 @@ public class FundingArbitrageService {
         return fundingRates;
     }
 
-    /**
-     * Получить полный ответ API (с кэшированием)
-     */
     private Map<String, Object> getFullApiResponse() {
         long now = System.currentTimeMillis();
 
-        // Проверяем кэш
         if (cachedFullResponse != null && (now - lastFetchTime) < CACHE_TTL_MS) {
             log.debug("[FundingBot] Using cached API response");
             return cachedFullResponse;
@@ -402,9 +387,6 @@ public class FundingArbitrageService {
         }
     }
 
-    /**
-     * Получить oi_rankings из кэшированного ответа
-     */
     private Map<String, Integer> getOiRankings() {
         Map<String, Object> fullResponse = getFullApiResponse();
 
@@ -430,7 +412,6 @@ public class FundingArbitrageService {
                 int rank;
                 if (rankValue instanceof String) {
                     String rankStr = (String) rankValue;
-                    // Обработка "500+"
                     rank = rankStr.contains("+") ? 999 : Integer.parseInt(rankStr);
                 } else {
                     rank = ((Number) rankValue).intValue();
@@ -446,7 +427,6 @@ public class FundingArbitrageService {
         log.info("[FundingBot] Parsed {} OI rankings", oiRankings.size());
         return oiRankings;
     }
-
 }
 
 

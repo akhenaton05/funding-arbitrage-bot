@@ -6,7 +6,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
-import ru.client.ExchangeClient;
 import ru.dto.exchanges.ExchangeType;
 import ru.dto.exchanges.OrderResult;
 import ru.dto.exchanges.extended.*;
@@ -26,7 +25,7 @@ import java.util.Map;
 @Setter
 @Component
 @ConfigurationProperties(prefix = "exchanges.extended")
-public class ExtendedClient implements ExchangeClient {
+public class ExtendedClient {
 
     private final ObjectMapper objectMapper;
     private final CloseableHttpClient httpClient;
@@ -42,6 +41,10 @@ public class ExtendedClient implements ExchangeClient {
         this.httpClient = httpClient;
         this.objectMapper = objectMapper;
     }
+
+    /**
+     * Leverage
+     */
 
     public String setLeverage(String market, int leverage) {
         String endpoint = baseUrl + "/user/leverage";
@@ -77,6 +80,10 @@ public class ExtendedClient implements ExchangeClient {
             return null;
         }
     }
+
+    /**
+     * Open\close\view position
+     */
 
     public String openPosition(String market, String side, double sizeUsd) {
         String orderUri = baseUrl + "/api/v1/user/order";
@@ -131,80 +138,6 @@ public class ExtendedClient implements ExchangeClient {
         } catch (Exception e) {
             log.error("[Extended] Exception opening position", e);
             return null;
-        }
-    }
-
-    public double getMarkPrice(String market) {
-        String url = baseUrl + "/market/price/" + market;
-
-        try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(20))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() != 200) {
-                log.error("[Extended] Mark price failed: {} → {}", response.statusCode(), response.body());
-                return 0.0;
-            }
-
-            String priceStr = response.body().trim();
-
-            if (priceStr.isEmpty()) {
-                log.error("[Extended] Empty price response for {}", market);
-                return 0.0;
-            }
-
-            try {
-                double markPrice = Double.parseDouble(priceStr);
-                log.info("[Extended] Mark price for {}: ${}", market, markPrice);
-                return markPrice;
-            } catch (NumberFormatException e) {
-                log.error("[Extended] Failed to parse price: '{}' for {}", priceStr, market, e);
-                return 0.0;
-            }
-
-        } catch (Exception e) {
-            log.error("[Extended] Failed to get mark price for {}", market, e);
-            return 0.0;
-        }
-    }
-
-    @Override
-    public Double getBalance() {
-        String balanceUri = baseUrl + "/balance";
-
-        try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(balanceUri))
-                    .timeout(Duration.ofSeconds(20))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() != 200) {
-                log.error("[Extended] Balance API error: {} → {}", response.statusCode(), response.body());
-                return 0.0;
-            }
-
-            ExtendedBalanceDto balanceResponse = objectMapper.readValue(response.body(), ExtendedBalanceDto.class);
-
-            if ("OK".equals(balanceResponse.getStatus())) {
-                double availableBalance = Double.parseDouble(balanceResponse.getData().getAvailableForTrade());
-                log.info("[Extended] Available balance: ${}", availableBalance);
-                return availableBalance;
-            }
-
-            log.warn("[Extended] Balance status not OK: {}", balanceResponse.getStatus());
-            return 0.0;
-
-        } catch (Exception e) {
-            log.error("[Extended] Failed to get balance", e);
-            return 0.0;
         }
     }
 
@@ -272,6 +205,118 @@ public class ExtendedClient implements ExchangeClient {
         }
     }
 
+    public String openPositionWithSize(String market, double size, String direction) {
+        String side = direction.equalsIgnoreCase("LONG") ? "BUY" : "SELL";
+
+        try {
+            log.info("[Extended] Opening position by size: market={}, size={}, direction={}",
+                    market, String.format("%.4f", size), direction);
+
+            // Validate size
+            if (size <= 0) {
+                log.error("[Extended] Invalid size: {}", size);
+                return null;
+            }
+
+            // Get step_size for rounding
+            double stepSize = getStepSize(market);
+            double roundedSize = roundToStepSize(size, stepSize);
+
+            if (roundedSize < size * 0.95) {
+                log.warn("[Extended] Size rounded down significantly: {} → {}",
+                        String.format("%.4f", size),
+                        String.format("%.4f", roundedSize));
+            }
+
+            // Get current price for logging
+            double price = getMarkPrice(market);
+            if (price <= 0) {
+                log.error("[Extended] Failed to get mark price for {}", market);
+                return null;
+            }
+
+            double notional = roundedSize * price;
+
+            log.info("[Extended] Position params: size={}, price=${}, notional=${}, step_size={}",
+                    String.format("%.4f", roundedSize),
+                    String.format("%.6f", price),
+                    String.format("%.2f", notional),
+                    stepSize);
+
+            // Open market position with exact size
+            String externalId = openMarketPosition(market, side, roundedSize, 2.0);
+
+            if (externalId == null) {
+                log.error("[Extended] Failed to open position with size {}", roundedSize);
+                return null;
+            }
+
+            log.info("[Extended] Position opened: external_id={}, size={} {}",
+                    externalId,
+                    String.format("%.4f", roundedSize),
+                    market.split("-")[0]);
+
+            return externalId;
+
+        } catch (Exception e) {
+            log.error("[Extended] Error opening position by size for {}", market, e);
+            return null;
+        }
+    }
+
+    public String openPositionWithFixedMargin(String symbol, double marginUsd, int leverage, String direction) {
+        String side = direction.equalsIgnoreCase("LONG") ? "BUY" : "SELL";
+
+        try {
+            //Set leverage
+            String leverageResult = setLeverage(symbol, leverage);
+            if (leverageResult == null) {
+                log.error("[Extended] Failed to set leverage");
+                return null;
+            }
+
+            //Validate balance
+            Double available = getBalance();
+            if (available == null || available < marginUsd) {
+                log.error("[Extended] Insufficient balance: ${} < ${}", available, marginUsd);
+                return null;
+            }
+
+            //Get price
+            double price = getMarkPrice(symbol);
+            if (price <= 0) {
+                log.error("[Extended] Failed to get price");
+                return null;
+            }
+
+            //Get step_size for proper rounding
+            double stepSize = getStepSize(symbol);
+
+            //Calculate position size
+            double notional = marginUsd * leverage;
+            double rawSize = notional / price;
+
+            double size = roundToStepSize(rawSize, stepSize);
+
+            log.info("[Extended] Opening position: margin=${}, leverage={}x, price=${}, raw_size={}, rounded_size={}, step_size={}",
+                    marginUsd, leverage, price, rawSize, size, stepSize);
+
+            //Open position
+            String externalId = openMarketPosition(symbol, side, size, 2.0); // 2% slippage
+
+            if (externalId == null) {
+                log.error("[Extended] Failed to open position");
+                return null;
+            }
+
+            log.info("[Extended] Position opened: external_id={}", externalId);
+            return externalId;
+
+        } catch (Exception e) {
+            log.error("[Extended] Error opening position", e);
+            return null;
+        }
+    }
 
     public OrderResult closePosition(String market, String currentSide) {
         String endpoint = baseUrl + "/positions/close";
@@ -375,166 +420,9 @@ public class ExtendedClient implements ExchangeClient {
         }
     }
 
-    public List<ExtendedOrderHistoryItem> getOrdersHistory(String market, Integer limit, Long cursor) {
-        try {
-            StringBuilder path = new StringBuilder("/orders/history");
-            boolean hasParams = false;
-
-            if (market != null || limit != null || cursor != null) {
-                path.append("?");
-                if (market != null) {
-                    path.append("market=").append(market).append("&");
-                    hasParams = true;
-                }
-                if (limit != null) {
-                    path.append("limit=").append(limit).append("&");
-                    hasParams = true;
-                }
-                if (cursor != null) {
-                    path.append("cursor=").append(cursor).append("&");
-                    hasParams = true;
-                }
-                if (hasParams) {
-                    path.setLength(path.length() - 1);
-                }
-            }
-
-            String fullUrl = baseUrl + path;
-            log.info("[Extended] JDK HttpClient → requesting: {}", fullUrl);
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(fullUrl))
-                    .timeout(Duration.ofSeconds(30))
-                    .header("Accept", "application/json")
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            int statusCode = response.statusCode();
-            String body = response.body();
-
-            log.info("[Extended] JDK getOrdersHistory → code={}, body length={}", statusCode, body.length());
-
-            if (statusCode == 200) {
-                ExtendedOrdersHistoryResponse resp = objectMapper.readValue(body, ExtendedOrdersHistoryResponse.class);
-
-                if ("OK".equalsIgnoreCase(resp.getStatus())) {
-                    log.info("[Extended] Успешно получено {} ордеров", resp.getData().size());
-                    return resp.getData();
-                } else {
-                    log.warn("[Extended] API вернул status != OK: {}", resp.getStatus());
-                    return null;
-                }
-            } else {
-                log.error("[Extended] Неудачный ответ сервера: {} → {}", statusCode, body);
-                return null;
-            }
-
-        } catch (Exception e) {
-            log.error("[Extended] Ошибка при получении истории ордеров (JDK client)", e);
-            return null;
-        }
-    }
-
-    public String openPositionWithFixedMargin(String symbol, double marginUsd, int leverage, String direction) {
-        String side = direction.equalsIgnoreCase("LONG") ? "BUY" : "SELL";
-
-        try {
-            //Set leverage
-            String leverageResult = setLeverage(symbol, leverage);
-            if (leverageResult == null) {
-                log.error("[Extended] Failed to set leverage");
-                return null;
-            }
-
-            //Validate balance
-            Double available = getBalance();
-            if (available == null || available < marginUsd) {
-                log.error("[Extended] Insufficient balance: ${} < ${}", available, marginUsd);
-                return null;
-            }
-
-            //Get price
-            double price = getMarkPrice(symbol);
-            if (price <= 0) {
-                log.error("[Extended] Failed to get price");
-                return null;
-            }
-
-            //Get step_size for proper rounding
-            double stepSize = getStepSize(symbol);
-
-            //Calculate position size
-            double notional = marginUsd * leverage;
-            double rawSize = notional / price;
-
-            double size = roundToStepSize(rawSize, stepSize);
-
-            log.info("[Extended] Opening position: margin=${}, leverage={}x, price=${}, raw_size={}, rounded_size={}, step_size={}",
-                    marginUsd, leverage, price, rawSize, size, stepSize);
-
-            //Open position
-            String externalId = openMarketPosition(symbol, side, size, 2.0); // 2% slippage
-
-            if (externalId == null) {
-                log.error("[Extended] Failed to open position");
-                return null;
-            }
-
-            log.info("[Extended] Position opened: external_id={}", externalId);
-            return externalId;
-
-        } catch (Exception e) {
-            log.error("[Extended] Error opening position", e);
-            return null;
-        }
-    }
-
-    private double roundToStepSize(double value, double stepSize) {
-        if (stepSize <= 0) {
-            return value;
-        }
-        return Math.floor(value / stepSize) * stepSize;
-    }
-
-    public double getStepSize(String market) {
-        try {
-            String url = baseUrl + "/market/info/" + market;
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(20))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() != 200) {
-                log.warn("[Extended] Failed to get step_size for {} (HTTP {}), using default 0.001",
-                        market, response.statusCode());
-                return 0.001;
-            }
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> result = objectMapper.readValue(response.body(), Map.class);
-
-            String stepSizeStr = (String) result.get("step_size");
-
-            if (stepSizeStr != null) {
-                double stepSize = Double.parseDouble(stepSizeStr);
-                log.info("[Extended] Step size for {}: {}", market, stepSize);
-                return stepSize;
-            }
-
-            log.warn("[Extended] No step_size field for {}, using default 0.001", market);
-            return 0.001;
-
-        } catch (Exception e) {
-            log.error("[Extended] Error getting step_size for {}, using default 0.001", market, e);
-            return 0.001;
-        }
-    }
+    /**
+     * Funding
+     */
 
     public ExtendedFundingHistoryResponse getFundingHistory(String market, String side, Long fromTime, Integer limit) {
         try {
@@ -601,6 +489,128 @@ public class ExtendedClient implements ExchangeClient {
         } catch (Exception e) {
             log.error("[Extended] Error getting funding history for {}", market, e);
             return null;
+        }
+    }
+
+    /**
+     * Utils
+     */
+
+    public double getMarkPrice(String market) {
+        String url = baseUrl + "/market/price/" + market;
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(20))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                log.error("[Extended] Mark price failed: {} → {}", response.statusCode(), response.body());
+                return 0.0;
+            }
+
+            String priceStr = response.body().trim();
+
+            if (priceStr.isEmpty()) {
+                log.error("[Extended] Empty price response for {}", market);
+                return 0.0;
+            }
+
+            try {
+                double markPrice = Double.parseDouble(priceStr);
+                log.info("[Extended] Mark price for {}: ${}", market, markPrice);
+                return markPrice;
+            } catch (NumberFormatException e) {
+                log.error("[Extended] Failed to parse price: '{}' for {}", priceStr, market, e);
+                return 0.0;
+            }
+
+        } catch (Exception e) {
+            log.error("[Extended] Failed to get mark price for {}", market, e);
+            return 0.0;
+        }
+    }
+
+    public Double getBalance() {
+        String balanceUri = baseUrl + "/balance";
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(balanceUri))
+                    .timeout(Duration.ofSeconds(20))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                log.error("[Extended] Balance API error: {} → {}", response.statusCode(), response.body());
+                return 0.0;
+            }
+
+            ExtendedBalanceDto balanceResponse = objectMapper.readValue(response.body(), ExtendedBalanceDto.class);
+
+            if ("OK".equals(balanceResponse.getStatus())) {
+                double availableBalance = Double.parseDouble(balanceResponse.getData().getAvailableForTrade());
+                log.info("[Extended] Available balance: ${}", availableBalance);
+                return availableBalance;
+            }
+
+            log.warn("[Extended] Balance status not OK: {}", balanceResponse.getStatus());
+            return 0.0;
+
+        } catch (Exception e) {
+            log.error("[Extended] Failed to get balance", e);
+            return 0.0;
+        }
+    }
+
+    private double roundToStepSize(double value, double stepSize) {
+        if (stepSize <= 0) {
+            return value;
+        }
+        return Math.floor(value / stepSize) * stepSize;
+    }
+
+    public double getStepSize(String market) {
+        try {
+            String url = baseUrl + "/market/info/" + market;
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(20))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                log.warn("[Extended] Failed to get step_size for {} (HTTP {}), using default 0.001",
+                        market, response.statusCode());
+                return 0.001;
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> result = objectMapper.readValue(response.body(), Map.class);
+
+            String stepSizeStr = (String) result.get("step_size");
+
+            if (stepSizeStr != null) {
+                double stepSize = Double.parseDouble(stepSizeStr);
+                log.info("[Extended] Step size for {}: {}", market, stepSize);
+                return stepSize;
+            }
+
+            log.warn("[Extended] No step_size field for {}, using default 0.001", market);
+            return 0.001;
+
+        } catch (Exception e) {
+            log.error("[Extended] Error getting step_size for {}, using default 0.001", market, e);
+            return 0.001;
         }
     }
 
@@ -772,65 +782,6 @@ public class ExtendedClient implements ExchangeClient {
 
         } catch (Exception e) {
             log.error("[Extended] Error estimating execution price for {}", market, e);
-            return null;
-        }
-    }
-
-    public String openPositionWithSize(String market, double size, String direction) {
-        String side = direction.equalsIgnoreCase("LONG") ? "BUY" : "SELL";
-
-        try {
-            log.info("[Extended] Opening position by size: market={}, size={}, direction={}",
-                    market, String.format("%.4f", size), direction);
-
-            // Validate size
-            if (size <= 0) {
-                log.error("[Extended] Invalid size: {}", size);
-                return null;
-            }
-
-            // Get step_size for rounding
-            double stepSize = getStepSize(market);
-            double roundedSize = roundToStepSize(size, stepSize);
-
-            if (roundedSize < size * 0.95) {
-                log.warn("[Extended] Size rounded down significantly: {} → {}",
-                        String.format("%.4f", size),
-                        String.format("%.4f", roundedSize));
-            }
-
-            // Get current price for logging
-            double price = getMarkPrice(market);
-            if (price <= 0) {
-                log.error("[Extended] Failed to get mark price for {}", market);
-                return null;
-            }
-
-            double notional = roundedSize * price;
-
-            log.info("[Extended] Position params: size={}, price=${}, notional=${}, step_size={}",
-                    String.format("%.4f", roundedSize),
-                    String.format("%.6f", price),
-                    String.format("%.2f", notional),
-                    stepSize);
-
-            // Open market position with exact size
-            String externalId = openMarketPosition(market, side, roundedSize, 2.0);
-
-            if (externalId == null) {
-                log.error("[Extended] Failed to open position with size {}", roundedSize);
-                return null;
-            }
-
-            log.info("[Extended] Position opened: external_id={}, size={} {}",
-                    externalId,
-                    String.format("%.4f", roundedSize),
-                    market.split("-")[0]);
-
-            return externalId;
-
-        } catch (Exception e) {
-            log.error("[Extended] Error opening position by size for {}", market, e);
             return null;
         }
     }

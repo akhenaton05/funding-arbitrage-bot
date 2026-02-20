@@ -134,12 +134,6 @@ public class AsterDex implements Exchange {
         }
     }
 
-
-    @Override
-    public boolean hasPosition(String symbol, Direction side) {
-        return false;
-    }
-
     @Override
     public OrderResult closePosition(String symbol, Direction currentSide) {
         try {
@@ -290,7 +284,6 @@ public class AsterDex implements Exchange {
     public String placeStopLoss(String symbol, Direction direction, double stopPrice) {
         String formattedSymbol = formatSymbol(symbol);
 
-        // Определяем side для SL (противоположный позиции)
         String slSide = direction == Direction.LONG ? "SELL" : "BUY";
         String positionSide = direction.toString(); // "LONG" or "SHORT"
 
@@ -306,7 +299,6 @@ public class AsterDex implements Exchange {
     public String placeTakeProfit(String symbol, Direction direction, double tpPrice) {
         String formattedSymbol = formatSymbol(symbol);
 
-        // Определяем side для TP (противоположный позиции)
         String tpSide = direction == Direction.LONG ? "SELL" : "BUY";
         String positionSide = direction.toString(); // "LONG" or "SHORT"
 
@@ -316,11 +308,6 @@ public class AsterDex implements Exchange {
                 positionSide,
                 tpPrice
         );
-    }
-
-    @Override
-    public void cancelAllOrders(String symbol) {
-        asterClient.cancelAllOrders(formatSymbol(symbol));
     }
 
     @Override

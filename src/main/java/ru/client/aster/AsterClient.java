@@ -15,9 +15,7 @@ import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.net.URIBuilder;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
-import ru.client.ExchangeClient;
 import ru.dto.exchanges.ExchangeType;
-import ru.dto.exchanges.MarginType;
 import ru.dto.exchanges.OrderResult;
 import ru.dto.exchanges.aster.*;
 
@@ -33,7 +31,7 @@ import java.util.*;
 @Setter
 @Component
 @ConfigurationProperties(prefix = "exchanges.aster")
-public class AsterClient implements ExchangeClient {
+public class AsterClient {
 
     private final ObjectMapper objectMapper;
     private final CloseableHttpClient httpClient;
@@ -42,16 +40,20 @@ public class AsterClient implements ExchangeClient {
     private String privateApiKey;
     private String baseUrl;
 
-    // Filters cache (at the start of the program)
+    //Filters cache (at the start of the program)
     private final Map<String, SymbolFilter> symbolFilters = new HashMap<>();
 
-    // Server time offset for timestamp correction
+    //Server time offset for timestamp correction
     private volatile long serverTimeOffset = 0L;
 
     public AsterClient(CloseableHttpClient httpClient, ObjectMapper objectMapper) {
         this.httpClient = httpClient;
         this.objectMapper = objectMapper;
     }
+
+    /**
+     * Initialisation
+     */
 
     @PostConstruct
     public void init() {
@@ -104,6 +106,10 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
+    /**
+     * Executions with signed requests
+     */
+
     private String executePublicGet(String endpoint, String queryParams) {
         try {
             URI uri = new URIBuilder(baseUrl + endpoint)
@@ -126,31 +132,6 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    public String setLeverage(String symbol, int leverage) {
-        StringBuilder params = new StringBuilder();
-        params.append("symbol=").append(symbol);
-        params.append("&leverage=").append(leverage);
-
-        String response = executeSignedRequest("POST", "/fapi/v1/leverage", params.toString());
-
-        log.info("[Aster] setLeverage response for {}: {}", symbol, response);
-
-        if (response != null && !response.isEmpty()) {
-            try {
-                JsonNode node = objectMapper.readTree(response);
-                int code = node.path("code").asInt(200);
-                if (code != 200) {
-                    log.error("[Aster] setLeverage failed for {} code={} msg={}",
-                            symbol, code, node.path("msg").asText());
-                    return null;
-                }
-            } catch (Exception e) {
-                log.warn("[Aster] Failed to parse setLeverage response", e);
-            }
-        }
-        return response;
-    }
-
     // Generate signature for the query
     private String sign(String queryString) {
         try {
@@ -168,9 +149,9 @@ public class AsterClient implements ExchangeClient {
     // Adding signature to the request and executing, returns plain body
     private String executeSignedRequest(String method, String endpoint, String queryParams) {
         try {
-            long timestamp = System.currentTimeMillis() + serverTimeOffset; // ✅ скорректированный timestamp
+            long timestamp = System.currentTimeMillis() + serverTimeOffset;
             String query = (queryParams != null && !queryParams.isEmpty())
-                    ? queryParams + "&recvWindow=10000&timestamp=" + timestamp  // ✅ увеличили до 10000
+                    ? queryParams + "&recvWindow=10000&timestamp=" + timestamp
                     : "recvWindow=10000&timestamp=" + timestamp;
 
             String signature = sign(query);
@@ -208,32 +189,85 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    @Override
-    public Double getBalance() {
-        try {
-            String json = executeSignedRequest("GET", "/fapi/v2/balance", null); // ✅ убрали лишний recvWindow
-            if (Objects.isNull(json)) return 0.0;
+    /**
+     * Leverage
+     */
 
-            JsonNode root = objectMapper.readTree(json);
-            if (!root.isArray() || root.isEmpty()) {
-                log.warn("[Aster] Balance is empty or not an array");
-                return 0.0;
-            }
+    public String setLeverage(String symbol, int leverage) {
+        StringBuilder params = new StringBuilder();
+        params.append("symbol=").append(symbol);
+        params.append("&leverage=").append(leverage);
 
-            double usdtAvailable = 0.0;
-            for (JsonNode node : root) {
-                if ("USDT".equals(node.path("asset").asText())) {
-                    usdtAvailable = node.path("availableBalance").asDouble(0.0);
-                    log.info("[Aster] Balance available USDT: {}", usdtAvailable);
-                    break;
+        String response = executeSignedRequest("POST", "/fapi/v1/leverage", params.toString());
+
+        log.info("[Aster] setLeverage response for {}: {}", symbol, response);
+
+        if (response != null && !response.isEmpty()) {
+            try {
+                JsonNode node = objectMapper.readTree(response);
+                int code = node.path("code").asInt(200);
+                if (code != 200) {
+                    log.error("[Aster] setLeverage failed for {} code={} msg={}",
+                            symbol, code, node.path("msg").asText());
+                    return null;
                 }
+            } catch (Exception e) {
+                log.warn("[Aster] Failed to parse setLeverage response", e);
             }
-            return usdtAvailable;
+        }
+        return response;
+    }
+
+    public int getMaxLeverage(String symbol) {
+        try {
+            log.info("[Aster] Getting max leverage for {}", symbol);
+
+            String queryParams = "symbol=" + symbol;
+            String response = executeSignedRequest("GET", "/fapi/v1/leverageBracket", queryParams);
+
+            if (response == null || response.isEmpty()) {
+                log.warn("[Aster] Empty response for leverage info, using default 10");
+                return 10;
+            }
+
+            log.debug("[Aster] Leverage response: {}", response);
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> responseList = objectMapper.readValue(
+                    response,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, Map.class)
+            );
+
+            if (responseList == null || responseList.isEmpty()) {
+                log.warn("[Aster] Empty leverage brackets list for {}, using default 10", symbol);
+                return 10;
+            }
+
+            Map<String, Object> data = responseList.getFirst();
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> brackets = (List<Map<String, Object>>) data.get("brackets");
+
+            if (brackets != null && !brackets.isEmpty()) {
+                Map<String, Object> firstBracket = brackets.get(0);
+                Integer maxLeverage = (Integer) firstBracket.get("initialLeverage");
+
+                log.info("[Aster] Max leverage for {}: {}x", symbol, maxLeverage);
+                return maxLeverage;
+            }
+
+            log.warn("[Aster] No brackets found for {}, using default 10", symbol);
+            return 10;
+
         } catch (Exception e) {
-            log.error("[Aster] Error getting balance", e);
-            return 0.0;
+            log.error("[Aster] Failed to get max leverage for {}, using default 10", symbol, e);
+            return 10;
         }
     }
+
+    /**
+     * Position open\close\get
+     */
 
     public String openMarketOrder(String symbol, String side, double quantity, String positionSide) {
         StringBuilder params = new StringBuilder();
@@ -394,377 +428,6 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
-    public double getMarkPrice(String symbol) {
-        try {
-            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/ticker/price");
-            builder.addParameter("symbol", symbol);
-            URI uri = builder.build();
-
-            HttpGet get = new HttpGet(uri);
-            log.info("[Aster] GET mark price для {}", symbol);
-
-            try (CloseableHttpResponse resp = httpClient.execute(get)) {
-                int code = resp.getCode();
-                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
-
-                if (code != 200) {
-                    log.error("[Aster] Mark price failed: code={}, body={}", code, body);
-                    return 0.0;
-                }
-
-                JsonNode root = objectMapper.readTree(body);
-                double price = root.path("price").asDouble(0.0);
-                log.debug("[Aster] Mark price {}: {}", symbol, price);
-                return price;
-            }
-        } catch (Exception e) {
-            log.error("[Aster] Ошибка получения mark price для {}", symbol, e);
-            return 0.0;
-        }
-    }
-
-    private int getPrecision(double step) {
-        String s = String.valueOf(step);
-        return s.length() - s.indexOf('.') - 1;
-    }
-
-    public List<AsterPosition> getPositions(String symbol) {
-        String query = symbol != null ? "symbol=" + symbol : null;
-        String json = executeSignedRequest("GET", "/fapi/v1/positionRisk", query);
-        if (json == null) return List.of();
-
-        try {
-            return objectMapper.readValue(json, objectMapper.getTypeFactory()
-                    .constructCollectionType(List.class, AsterPosition.class));
-        } catch (Exception e) {
-            log.error("[Aster] Error parsing positions", e);
-            return List.of();
-        }
-    }
-
-    public OrderResult closePosition(String symbol) {
-        try {
-            List<AsterPosition> positions = getPositions(symbol);
-
-            if (Objects.isNull(positions) || positions.isEmpty()) {
-                log.info("[Aster] No positions for {}", symbol);
-                return OrderResult.builder()
-                        .exchange(ExchangeType.ASTER)
-                        .symbol(symbol)
-                        .success(true)
-                        .message("Position already closed")
-                        .build();
-            }
-
-            AsterPosition targetPos = null;
-            for (AsterPosition pos : positions) {
-                double amt = Double.parseDouble(pos.getPositionAmt());
-                if (Math.abs(amt) > 1e-8) {
-                    targetPos = pos;
-                    break;
-                }
-            }
-
-            if (targetPos == null) {
-                log.info("[Aster] All positions for {} empty", symbol);
-                return OrderResult.builder()
-                        .exchange(ExchangeType.ASTER)
-                        .symbol(symbol)
-                        .success(true)
-                        .message("Position already closed")
-                        .build();
-            }
-
-            String positionSide = targetPos.getPositionSide();
-            double amt = Double.parseDouble(targetPos.getPositionAmt());
-            String closeSide = amt > 0 ? "SELL" : "BUY";
-            String qty = String.format(Locale.US, "%.3f", Math.abs(amt));
-
-            StringBuilder params = new StringBuilder();
-            params.append("symbol=").append(symbol);
-            params.append("&side=").append(closeSide);
-            params.append("&positionSide=").append(positionSide);
-            params.append("&type=MARKET");
-            params.append("&quantity=").append(qty);
-
-            log.info("[Aster] Closing in Hedge Mode: symbol={}, side={}, positionSide={}, qty={}",
-                    symbol, closeSide, positionSide, qty);
-
-            String result = executeSignedRequest("POST", "/fapi/v1/order", params.toString());
-
-            log.info("[Aster] Close order sent, validating position closure...");
-
-            boolean closed = waitPositionClosed(symbol, positionSide, 10.0);
-
-            if (closed) {
-                log.info("[Aster] Position closed: {} {}", symbol, positionSide);
-            } else {
-                log.warn("[Aster] Position close Timeout");
-            }
-
-            return OrderResult.builder()
-                    .exchange(ExchangeType.ASTER)
-                    .symbol(symbol)
-                    .orderId(result)
-                    .success(true)
-                    .message("Position closed successfully")
-                    .build();
-
-        } catch (Exception e) {
-            log.error("[Aster] Error closing position for {}", symbol, e);
-            return OrderResult.builder()
-                    .exchange(ExchangeType.ASTER)
-                    .symbol(symbol)
-                    .success(true)
-                    .message("Error closing position")
-                    .build();
-        }
-    }
-
-    private boolean waitPositionClosed(String symbol, String positionSide, double timeoutSec) {
-        long start = System.currentTimeMillis();
-        long pollInterval = 300;
-
-        while ((System.currentTimeMillis() - start) / 1000.0 < timeoutSec) {
-            try {
-                List<AsterPosition> positions = getPositions(symbol);
-
-                if (positions == null || positions.isEmpty()) {
-                    log.info("[Aster] waitPositionClosed: {} disappeared → CLOSED", symbol);
-                    return true;
-                }
-
-                boolean found = false;
-                for (AsterPosition p : positions) {
-                    if (p.getPositionSide().equals(positionSide)) {
-                        double amt = Math.abs(Double.parseDouble(p.getPositionAmt()));
-
-                        if (amt < 0.001) {
-                            log.info("[Aster] waitPositionClosed: {} {} size={} → CLOSED",
-                                    symbol, positionSide, amt);
-                            return true;
-                        }
-
-                        log.debug("[Aster] waitPositionClosed: {} {} size={} still open",
-                                symbol, positionSide, amt);
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found) {
-                    log.info("[Aster] waitPositionClosed: {} {} not found → CLOSED", symbol, positionSide);
-                    return true;
-                }
-
-                Thread.sleep(pollInterval);
-
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            } catch (Exception e) {
-                log.warn("[Aster] waitPositionClosed exception: {}", e.getMessage());
-                try {
-                    Thread.sleep(pollInterval);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    return false;
-                }
-            }
-        }
-
-        log.warn("[Aster] waitPositionClosed TIMEOUT after {}s", timeoutSec);
-        return false;
-    }
-
-    private String handleResponse(CloseableHttpResponse resp) throws Exception {
-        int code = resp.getCode();
-        String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
-        if (code >= 200 && code < 300) {
-            return body;
-        }
-        log.error("[Aster] API Error: code={}, body={}", code, body);
-        throw new RuntimeException("[Aster] API error: " + code + " → " + body);
-    }
-
-    public int getMaxLeverage(String symbol) {
-        try {
-            log.info("[Aster] Getting max leverage for {}", symbol);
-
-            String queryParams = "symbol=" + symbol;
-            String response = executeSignedRequest("GET", "/fapi/v1/leverageBracket", queryParams);
-
-            if (response == null || response.isEmpty()) {
-                log.warn("[Aster] Empty response for leverage info, using default 10");
-                return 10;
-            }
-
-            log.debug("[Aster] Leverage response: {}", response);
-
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> responseList = objectMapper.readValue(
-                    response,
-                    objectMapper.getTypeFactory().constructCollectionType(List.class, Map.class)
-            );
-
-            if (responseList == null || responseList.isEmpty()) {
-                log.warn("[Aster] Empty leverage brackets list for {}, using default 10", symbol);
-                return 10;
-            }
-
-            Map<String, Object> data = responseList.getFirst();
-
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> brackets = (List<Map<String, Object>>) data.get("brackets");
-
-            if (brackets != null && !brackets.isEmpty()) {
-                Map<String, Object> firstBracket = brackets.get(0);
-                Integer maxLeverage = (Integer) firstBracket.get("initialLeverage");
-
-                log.info("[Aster] Max leverage for {}: {}x", symbol, maxLeverage);
-                return maxLeverage;
-            }
-
-            log.warn("[Aster] No brackets found for {}, using default 10", symbol);
-            return 10;
-
-        } catch (Exception e) {
-            log.error("[Aster] Failed to get max leverage for {}, using default 10", symbol, e);
-            return 10;
-        }
-    }
-
-    public PremiumIndexResponse getPremiumIndexInfo(String symbol) {
-        try {
-            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/premiumIndex");
-            builder.addParameter("symbol", symbol);
-            URI uri = builder.build();
-
-            HttpGet get = new HttpGet(uri);
-            log.info("[Aster] GET premium index info for {}", symbol);
-
-            try (CloseableHttpResponse resp = httpClient.execute(get)) {
-                int code = resp.getCode();
-                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
-
-                if (code != 200) {
-                    log.error("[Aster] Premium index failed: code={}, body={}", code, body);
-                    return null;
-                }
-
-                PremiumIndexResponse response = objectMapper.readValue(body, PremiumIndexResponse.class);
-
-                log.info("[Aster] Premium index for {}: fundingRate={}%, nextFunding in {} min, markPrice={}",
-                        symbol,
-                        response.getLastFundingRateAsDouble() * 100,
-                        response.getMinutesUntilFunding(),
-                        response.getMarkPrice());
-
-                return response;
-            }
-        } catch (Exception e) {
-            log.error("[Aster] Error getting premium index for {}", symbol, e);
-            return null;
-        }
-    }
-
-    public long getMinutesUntilFunding(String symbol) {
-        PremiumIndexResponse info = getPremiumIndexInfo(symbol);
-        if (info == null) {
-            log.error("[Aster] Failed to get premium index for {}", symbol);
-            return -1;
-        }
-        return info.getMinutesUntilFunding();
-    }
-
-    public AsterBookTicker getBookTicker(String symbol) {
-        try {
-            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/ticker/bookTicker");
-            builder.addParameter("symbol", symbol);
-            URI uri = builder.build();
-
-            HttpGet get = new HttpGet(uri);
-            log.debug("[Aster] GET book ticker for {}", symbol);
-
-            try (CloseableHttpResponse resp = httpClient.execute(get)) {
-                int code = resp.getCode();
-                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
-
-                if (code != 200) {
-                    log.error("[Aster] Book ticker failed: code={}, body={}", code, body);
-                    return null;
-                }
-
-                AsterBookTicker ticker = objectMapper.readValue(body, AsterBookTicker.class);
-
-                log.info("[Aster] Book ticker {}: bid={} ({}), ask={} ({}), spread={}%",
-                        symbol,
-                        ticker.getBidPrice(),
-                        ticker.getBidQty(),
-                        ticker.getAskPrice(),
-                        ticker.getAskQty(),
-                        calculateSpread(ticker)
-                );
-
-                return ticker;
-            }
-        } catch (Exception e) {
-            log.error("[Aster] Error getting book ticker for {}", symbol, e);
-            return null;
-        }
-    }
-
-    private String calculateSpread(AsterBookTicker ticker) {
-        try {
-            double bid = Double.parseDouble(ticker.getBidPrice());
-            double ask = Double.parseDouble(ticker.getAskPrice());
-            double spread = ((ask - bid) / ask) * 100;
-            return String.format("%.3f", spread);
-        } catch (Exception e) {
-            return "N/A";
-        }
-    }
-
-    public Double estimateExecutionPrice(String symbol, double size, boolean isSell) {
-        try {
-            AsterBookTicker ticker = getBookTicker(symbol);
-
-            if (ticker == null) {
-                log.warn("[Aster] Book ticker unavailable for {}", symbol);
-                return null;
-            }
-
-            double price = isSell
-                    ? Double.parseDouble(ticker.getBidPrice())
-                    : Double.parseDouble(ticker.getAskPrice());
-
-            double availableQty = isSell
-                    ? Double.parseDouble(ticker.getBidQty())
-                    : Double.parseDouble(ticker.getAskQty());
-
-            log.info("[Aster] Execution estimate {}: size={}, price={}, available_qty={}, sufficient={}",
-                    symbol,
-                    String.format("%.4f", size),
-                    String.format("%.6f", price),
-                    String.format("%.4f", availableQty),
-                    size <= availableQty
-            );
-
-            if (size > availableQty) {
-                double penalty = isSell ? 0.998 : 1.002;
-                price = price * penalty;
-                log.warn("[Aster] Insufficient liquidity at best price, applying {}% penalty",
-                        (Math.abs(1 - penalty) * 100));
-            }
-
-            return price;
-
-        } catch (Exception e) {
-            log.error("[Aster] Error estimating execution price for {}", symbol, e);
-            return null;
-        }
-    }
-
     public String openPositionWithSize(String symbol, double size, String direction) {
         final String side;
         final String positionSide;
@@ -878,6 +541,377 @@ public class AsterClient implements ExchangeClient {
         }
     }
 
+    public List<AsterPosition> getPositions(String symbol) {
+        String query = symbol != null ? "symbol=" + symbol : null;
+        String json = executeSignedRequest("GET", "/fapi/v1/positionRisk", query);
+        if (json == null) return List.of();
+
+        try {
+            return objectMapper.readValue(json, objectMapper.getTypeFactory()
+                    .constructCollectionType(List.class, AsterPosition.class));
+        } catch (Exception e) {
+            log.error("[Aster] Error parsing positions", e);
+            return List.of();
+        }
+    }
+
+    public OrderResult closePosition(String symbol) {
+        try {
+            List<AsterPosition> positions = getPositions(symbol);
+
+            if (Objects.isNull(positions) || positions.isEmpty()) {
+                log.info("[Aster] No positions for {}", symbol);
+                return OrderResult.builder()
+                        .exchange(ExchangeType.ASTER)
+                        .symbol(symbol)
+                        .success(true)
+                        .message("Position already closed")
+                        .build();
+            }
+
+            AsterPosition targetPos = null;
+            for (AsterPosition pos : positions) {
+                double amt = Double.parseDouble(pos.getPositionAmt());
+                if (Math.abs(amt) > 1e-8) {
+                    targetPos = pos;
+                    break;
+                }
+            }
+
+            if (targetPos == null) {
+                log.info("[Aster] All positions for {} empty", symbol);
+                return OrderResult.builder()
+                        .exchange(ExchangeType.ASTER)
+                        .symbol(symbol)
+                        .success(true)
+                        .message("Position already closed")
+                        .build();
+            }
+
+            String positionSide = targetPos.getPositionSide();
+            double amt = Double.parseDouble(targetPos.getPositionAmt());
+            String closeSide = amt > 0 ? "SELL" : "BUY";
+            String qty = String.format(Locale.US, "%.3f", Math.abs(amt));
+
+            StringBuilder params = new StringBuilder();
+            params.append("symbol=").append(symbol);
+            params.append("&side=").append(closeSide);
+            params.append("&positionSide=").append(positionSide);
+            params.append("&type=MARKET");
+            params.append("&quantity=").append(qty);
+
+            log.info("[Aster] Closing in Hedge Mode: symbol={}, side={}, positionSide={}, qty={}",
+                    symbol, closeSide, positionSide, qty);
+
+            String result = executeSignedRequest("POST", "/fapi/v1/order", params.toString());
+
+            log.info("[Aster] Close order sent, validating position closure...");
+
+            boolean closed = waitPositionClosed(symbol, positionSide, 10.0);
+
+            if (closed) {
+                log.info("[Aster] Position closed: {} {}", symbol, positionSide);
+            } else {
+                log.warn("[Aster] Position close Timeout");
+            }
+
+            return OrderResult.builder()
+                    .exchange(ExchangeType.ASTER)
+                    .symbol(symbol)
+                    .orderId(result)
+                    .success(true)
+                    .message("Position closed successfully")
+                    .build();
+
+        } catch (Exception e) {
+            log.error("[Aster] Error closing position for {}", symbol, e);
+            return OrderResult.builder()
+                    .exchange(ExchangeType.ASTER)
+                    .symbol(symbol)
+                    .success(true)
+                    .message("Error closing position")
+                    .build();
+        }
+    }
+
+    public void cancelAllOrders(String symbol) {
+        String params = "symbol=" + symbol;
+
+        log.info("[Aster] Cancelling all orders for {}", symbol);
+
+        try {
+            String response = executeSignedRequest("DELETE", "/fapi/v1/allOpenOrders", params);
+            log.info("[Aster] All orders cancelled for {}: {}", symbol, response);
+        } catch (Exception e) {
+            log.error("[Aster] Failed to cancel orders for {}", symbol, e);
+        }
+    }
+
+    /**
+     * OrderBook
+     */
+
+    public PremiumIndexResponse getPremiumIndexInfo(String symbol) {
+        try {
+            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/premiumIndex");
+            builder.addParameter("symbol", symbol);
+            URI uri = builder.build();
+
+            HttpGet get = new HttpGet(uri);
+            log.info("[Aster] GET premium index info for {}", symbol);
+
+            try (CloseableHttpResponse resp = httpClient.execute(get)) {
+                int code = resp.getCode();
+                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+
+                if (code != 200) {
+                    log.error("[Aster] Premium index failed: code={}, body={}", code, body);
+                    return null;
+                }
+
+                PremiumIndexResponse response = objectMapper.readValue(body, PremiumIndexResponse.class);
+
+                log.info("[Aster] Premium index for {}: fundingRate={}%, nextFunding in {} min, markPrice={}",
+                        symbol,
+                        response.getLastFundingRateAsDouble() * 100,
+                        response.getMinutesUntilFunding(),
+                        response.getMarkPrice());
+
+                return response;
+            }
+        } catch (Exception e) {
+            log.error("[Aster] Error getting premium index for {}", symbol, e);
+            return null;
+        }
+    }
+
+    public long getMinutesUntilFunding(String symbol) {
+        PremiumIndexResponse info = getPremiumIndexInfo(symbol);
+        if (info == null) {
+            log.error("[Aster] Failed to get premium index for {}", symbol);
+            return -1;
+        }
+        return info.getMinutesUntilFunding();
+    }
+
+    /**
+     * Utils
+     */
+
+    public double getMarkPrice(String symbol) {
+        try {
+            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/ticker/price");
+            builder.addParameter("symbol", symbol);
+            URI uri = builder.build();
+
+            HttpGet get = new HttpGet(uri);
+            log.info("[Aster] GET mark price для {}", symbol);
+
+            try (CloseableHttpResponse resp = httpClient.execute(get)) {
+                int code = resp.getCode();
+                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+
+                if (code != 200) {
+                    log.error("[Aster] Mark price failed: code={}, body={}", code, body);
+                    return 0.0;
+                }
+
+                JsonNode root = objectMapper.readTree(body);
+                double price = root.path("price").asDouble(0.0);
+                log.debug("[Aster] Mark price {}: {}", symbol, price);
+                return price;
+            }
+        } catch (Exception e) {
+            log.error("[Aster] Ошибка получения mark price для {}", symbol, e);
+            return 0.0;
+        }
+    }
+
+    public Double getBalance() {
+        try {
+            String json = executeSignedRequest("GET", "/fapi/v2/balance", null);
+            if (Objects.isNull(json)) return 0.0;
+
+            JsonNode root = objectMapper.readTree(json);
+            if (!root.isArray() || root.isEmpty()) {
+                log.warn("[Aster] Balance is empty or not an array");
+                return 0.0;
+            }
+
+            double usdtAvailable = 0.0;
+            for (JsonNode node : root) {
+                if ("USDT".equals(node.path("asset").asText())) {
+                    usdtAvailable = node.path("availableBalance").asDouble(0.0);
+                    log.info("[Aster] Balance available USDT: {}", usdtAvailable);
+                    break;
+                }
+            }
+            return usdtAvailable;
+        } catch (Exception e) {
+            log.error("[Aster] Error getting balance", e);
+            return 0.0;
+        }
+    }
+
+    private int getPrecision(double step) {
+        String s = String.valueOf(step);
+        return s.length() - s.indexOf('.') - 1;
+    }
+
+    private boolean waitPositionClosed(String symbol, String positionSide, double timeoutSec) {
+        long start = System.currentTimeMillis();
+        long pollInterval = 300;
+
+        while ((System.currentTimeMillis() - start) / 1000.0 < timeoutSec) {
+            try {
+                List<AsterPosition> positions = getPositions(symbol);
+
+                if (positions == null || positions.isEmpty()) {
+                    log.info("[Aster] waitPositionClosed: {} disappeared → CLOSED", symbol);
+                    return true;
+                }
+
+                boolean found = false;
+                for (AsterPosition p : positions) {
+                    if (p.getPositionSide().equals(positionSide)) {
+                        double amt = Math.abs(Double.parseDouble(p.getPositionAmt()));
+
+                        if (amt < 0.001) {
+                            log.info("[Aster] waitPositionClosed: {} {} size={} → Closed",
+                                    symbol, positionSide, amt);
+                            return true;
+                        }
+
+                        log.debug("[Aster] waitPositionClosed: {} {} size={} still open",
+                                symbol, positionSide, amt);
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found) {
+                    log.info("[Aster] waitPositionClosed: {} {} not found → Closed", symbol, positionSide);
+                    return true;
+                }
+
+                Thread.sleep(pollInterval);
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            } catch (Exception e) {
+                log.warn("[Aster] waitPositionClosed exception: {}", e.getMessage());
+                try {
+                    Thread.sleep(pollInterval);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+
+        log.warn("[Aster] waitPositionClosed timeout after {}s", timeoutSec);
+        return false;
+    }
+
+    private String handleResponse(CloseableHttpResponse resp) throws Exception {
+        int code = resp.getCode();
+        String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+        if (code >= 200 && code < 300) {
+            return body;
+        }
+        log.error("[Aster] API Error: code={}, body={}", code, body);
+        throw new RuntimeException("[Aster] API error: " + code + " → " + body);
+    }
+
+    public AsterBookTicker getBookTicker(String symbol) {
+        try {
+            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/ticker/bookTicker");
+            builder.addParameter("symbol", symbol);
+            URI uri = builder.build();
+
+            HttpGet get = new HttpGet(uri);
+            log.debug("[Aster] GET book ticker for {}", symbol);
+
+            try (CloseableHttpResponse resp = httpClient.execute(get)) {
+                int code = resp.getCode();
+                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+
+                if (code != 200) {
+                    log.error("[Aster] Book ticker failed: code={}, body={}", code, body);
+                    return null;
+                }
+
+                AsterBookTicker ticker = objectMapper.readValue(body, AsterBookTicker.class);
+
+                log.info("[Aster] Book ticker {}: bid={} ({}), ask={} ({}), spread={}%",
+                        symbol,
+                        ticker.getBidPrice(),
+                        ticker.getBidQty(),
+                        ticker.getAskPrice(),
+                        ticker.getAskQty(),
+                        calculateSpread(ticker)
+                );
+
+                return ticker;
+            }
+        } catch (Exception e) {
+            log.error("[Aster] Error getting book ticker for {}", symbol, e);
+            return null;
+        }
+    }
+
+    private String calculateSpread(AsterBookTicker ticker) {
+        try {
+            double bid = Double.parseDouble(ticker.getBidPrice());
+            double ask = Double.parseDouble(ticker.getAskPrice());
+            double spread = ((ask - bid) / ask) * 100;
+            return String.format("%.3f", spread);
+        } catch (Exception e) {
+            return "N/A";
+        }
+    }
+
+    public Double estimateExecutionPrice(String symbol, double size, boolean isSell) {
+        try {
+            AsterBookTicker ticker = getBookTicker(symbol);
+
+            if (ticker == null) {
+                log.warn("[Aster] Book ticker unavailable for {}", symbol);
+                return null;
+            }
+
+            double price = isSell
+                    ? Double.parseDouble(ticker.getBidPrice())
+                    : Double.parseDouble(ticker.getAskPrice());
+
+            double availableQty = isSell
+                    ? Double.parseDouble(ticker.getBidQty())
+                    : Double.parseDouble(ticker.getAskQty());
+
+            log.info("[Aster] Execution estimate {}: size={}, price={}, available_qty={}, sufficient={}",
+                    symbol,
+                    String.format("%.4f", size),
+                    String.format("%.6f", price),
+                    String.format("%.4f", availableQty),
+                    size <= availableQty
+            );
+
+            if (size > availableQty) {
+                double penalty = isSell ? 0.998 : 1.002;
+                price = price * penalty;
+                log.warn("[Aster] Insufficient liquidity at best price, applying {}% penalty",
+                        (Math.abs(1 - penalty) * 100));
+            }
+
+            return price;
+
+        } catch (Exception e) {
+            log.error("[Aster] Error estimating execution price for {}", symbol, e);
+            return null;
+        }
+    }
+
     public Double calculateMaxSizeForMargin(String symbol, double marginUsd, int leverage, boolean isBuy) {
         try {
             double notional = marginUsd * leverage;
@@ -923,6 +957,10 @@ public class AsterClient implements ExchangeClient {
             return null;
         }
     }
+
+    /**
+     * Sl\Tp
+     */
 
     public String placeStopLoss(String symbol, String side, String positionSide, double stopPrice) {
         StringBuilder params = new StringBuilder();
@@ -993,19 +1031,6 @@ public class AsterClient implements ExchangeClient {
         } catch (Exception e) {
             log.error("[Aster] Failed to place Take Profit for {}", symbol, e);
             return null;
-        }
-    }
-
-    public void cancelAllOrders(String symbol) {
-        String params = "symbol=" + symbol;
-
-        log.info("[Aster] Cancelling all orders for {}", symbol);
-
-        try {
-            String response = executeSignedRequest("DELETE", "/fapi/v1/allOpenOrders", params);
-            log.info("[Aster] All orders cancelled for {}: {}", symbol, response);
-        } catch (Exception e) {
-            log.error("[Aster] Failed to cancel orders for {}", symbol, e);
         }
     }
 }

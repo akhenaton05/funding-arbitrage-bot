@@ -49,18 +49,7 @@ public class ExchangeFactory {
         }
     }
 
-    public boolean hasExchange(ExchangeType type) {
-        return exchanges.containsKey(type);
-    }
-
     public List<Exchange> getAllExchanges() {
         return List.copyOf(exchanges.values());
-    }
-
-    public double getMinimumBalance() {
-        return exchanges.values().stream()
-                .mapToDouble(e -> e.getBalance().getBalance())
-                .min()
-                .orElse(0.0);
     }
 }

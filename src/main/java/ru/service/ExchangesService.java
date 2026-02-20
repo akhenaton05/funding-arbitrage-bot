@@ -13,6 +13,7 @@ import ru.dto.exchanges.*;
 import ru.dto.funding.*;
 import ru.event.NewArbitrageEvent;
 import ru.event.PnLThresholdEvent;
+import ru.event.PositionUpdateEvent;
 import ru.exceptions.ClosingPositionException;
 import ru.exceptions.OpeningPositionException;
 import ru.exchanges.Exchange;
@@ -58,6 +59,7 @@ public class ExchangesService {
         log.info("[FundingBot] Result: {}", result);
     }
 
+    //Closing only Fast mode
     @Scheduled(cron = "10 01 * * * *", zone = "UTC")
     public void closeOnFundingTime() {
         if (openedPositions.isEmpty()) {
@@ -186,7 +188,7 @@ public class ExchangesService {
         }
     }
 
-    @Scheduled(fixedDelay = 600000) // Каждые 10 минут
+    @Scheduled(fixedDelay = 600000) //Every 10 min
     public void checkPositions() {
         if (openedPositions.isEmpty()) {
             return;
@@ -222,7 +224,7 @@ public class ExchangesService {
      */
 
     public String openPositionWithEqualSize(FundingOpenSignal signal) {
-        //parsing signal and creating exchanges
+        //Creating exchanges
         Exchange exchangeOne = exchangeFactory.getExchange(signal.getFirstPosition().getExchange());
         Exchange exchangeTwo = exchangeFactory.getExchange(signal.getSecondPosition().getExchange());
 
@@ -261,13 +263,13 @@ public class ExchangesService {
 
         int leverage = signal.getLeverage();
 
-        //Validation for Aster leverage
+        //Max leverage for ticker validation for Aster leverage
         if (exchangeOne.getType().equals(ExchangeType.ASTER) || exchangeTwo.getType().equals(ExchangeType.ASTER)) {
             Exchange ast = exchangeOne.getType().equals(ExchangeType.ASTER) ? exchangeOne : exchangeTwo;
             leverage = Math.min(signal.getLeverage(), validateLeverage(signal.getTicker(), ast));
         }
 
-        //Validation for Lighter leverage
+        //Max leverage for ticker validation for Lighter leverage
         if (exchangeOne.getType().equals(ExchangeType.LIGHTER) || exchangeTwo.getType().equals(ExchangeType.LIGHTER)) {
             Exchange lighter = exchangeOne.getType().equals(ExchangeType.LIGHTER) ? exchangeOne : exchangeTwo;
             int lighterMaxLeverage = lighter.getMaxLeverage(signal.getTicker());
@@ -330,7 +332,7 @@ public class ExchangesService {
         String firstOrderId;
         String secondOrderId;
 
-        //Parallel opening CompletableFuture
+        //Parallel opening
         CompletableFuture<String> firstFuture = CompletableFuture.supplyAsync(() -> {
             try {
                 log.info("[FundingBot] {} opening {} {} @ {}x with size {}",
@@ -1111,9 +1113,9 @@ public class ExchangesService {
             log.info("  Funding:       ${}", String.format("%.4f", pnlData.getTotalFundingNet()));
             log.info("  Open Fees:     ${}", String.format("%.4f", pnlData.getTotalOpenFees()));
             log.info("  Close Fees:    ${}", String.format("%.4f", pnlData.getTotalCloseFees()));
-            log.info("  Net P&L:       ${}", String.format("%.4f", pnlData.getNetPnl()));
             log.info("  Total Slippage Impact: ${}",
                     String.format("%.4f", firstSlippageImpact + secondSlippageImpact));
+            log.info("  Net P&L:       ${}", String.format("%.4f", pnlData.getNetPnl()));
 
             return pnlData;
 
@@ -1169,28 +1171,46 @@ public class ExchangesService {
     private boolean shouldCloseSmart(FundingCloseSignal pos, double currentSpread, ArbitrageRates currentRate) {
         //Checking directions flip
         if (!pos.getAction().equalsIgnoreCase(currentRate.getAction())) {
-            log.info("[FundingBot] Funding rate flipped! Spread={}, held={}min",
-                    currentSpread, getHeldMinutes(pos));
-            pos.setBadStreak(pos.getBadStreak() + 1);
+            String message = "[FundingBot] Funding rate flipped! Spread: " + currentSpread;
+            log.info(message);
+            PositionPnLData pnLData = positionDataMap.get(pos.getId());
+
+            eventPublisher.publishEvent(PositionUpdateEvent.builder()
+                    .message("Funding Rate flipped! Spread: " + currentSpread)
+                    .pnlData(pnLData)
+                    .positionId(pos.getId())
+                    .mode(pos.getMode().toString())
+                    .ticker(pos.getTicker())
+                    .build()
+            );
         }
 
         //Min rate allowed
         double threshold = fundingConfig.getSmart().getCloseThreshold();
 
         if (currentSpread <= threshold) {
-            pos.setBadStreak(pos.getBadStreak() + 1);
-            log.debug("[FundingBot] Bad spread: {} <= {}, streak={}",
+            String message = "[FundingBot] Spread is low:" + currentSpread;
+            log.info("[FundingBot] Bad spread: {} <= {}, streak={}",
                     currentSpread, threshold, pos.getBadStreak());
-            pos.setBadStreak(pos.getBadStreak() + 1);
+            PositionPnLData pnLData = positionDataMap.get(pos.getId());
+
+            eventPublisher.publishEvent(PositionUpdateEvent.builder()
+                    .message("Spread is low:" + currentSpread)
+                    .pnlData(pnLData)
+                    .positionId(pos.getId())
+                    .mode(pos.getMode().toString())
+                    .ticker(pos.getTicker())
+                    .build()
+            );
         }
 
-        int badStreakThreshold = fundingConfig.getSmart().getBadStreakThreshold();
-
-        if (pos.getBadStreak() >= badStreakThreshold) {
-            log.info("[SmartHold] Bad streak {} >= {}",
-                    pos.getBadStreak(), badStreakThreshold);
-            return true;
-        }
+//        int badStreakThreshold = fundingConfig.getSmart().getBadStreakThreshold();
+//
+//        if (pos.getBadStreak() >= badStreakThreshold) {
+//            log.info("[SmartHold] Bad streak {} >= {}",
+//                    pos.getBadStreak(), badStreakThreshold);
+//            return true;
+//        }
 
         return false;
     }

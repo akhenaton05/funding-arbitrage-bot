@@ -18,6 +18,7 @@ public class FundingCloseSignal {
     private Exchange secondExchange;
     private double openedFundingRate;
     private double currentFindingRate;
+    private String closureReason;
     //Smart Mode
     private String action;
     private HoldingMode mode;

@@ -41,7 +41,7 @@ public class AsterPositionMapper {
                     .build();
 
         } catch (Exception e) {
-            log.error("[AsterMapper] Failed to map position: {}", e.getMessage(), e);
+            log.error("[Aster] Failed to map position: {}", e.getMessage(), e);
             return null;
         }
     }

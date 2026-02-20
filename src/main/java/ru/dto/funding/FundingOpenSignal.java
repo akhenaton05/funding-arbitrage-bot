@@ -12,10 +12,6 @@ public class FundingOpenSignal {
     private String ticker;
     private ExchangePosition firstPosition;
     private ExchangePosition secondPosition;
-//    private ExchangeType exchangeOne;
-//    private ExchangeType exchangeTwo;
-//    private Direction firstDirection;
-//    private Direction secondDirection;
     private String action;
     private HoldingMode mode;
     private int leverage;

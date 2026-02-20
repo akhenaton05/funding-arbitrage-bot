@@ -86,36 +86,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
     }
 
-//    private void sendRates(Long chatId) {
-//        log.info("Request to get funding rates received");
-//        sendTypingAction(chatId);
-//
-//        try {
-//            List<ArbitrageRates> rates = fundingService.calculateArbitrageRates();
-//
-//            StringBuilder result = new StringBuilder();
-//            result.append("```\n");
-//            result.append(String.format("%-7s | %-7s | %-8s | %-8s\n",
-//                    "Ticker", "Max Arb",  rates.getFirst().getFirstExchange().getDisplayName(), rates.getFirst().getSecondExchange().getDisplayName()));
-//            result.append("-".repeat(40)).append("\n");
-//
-//            rates.stream()
-//                    .limit(10)
-//                    .forEach(opp -> result.append(String.format("%-7s | %6.1f%% | %7.1f%% | %9.1f%%\n",
-//                            opp.getSymbol(),
-//                            opp.getArbitrageRate(),
-//                            opp.getFirstRate(),
-//                            opp.getSecondRate())));
-//
-//            result.append("```");
-//
-//            sendMessage(chatId, result.toString());
-//        } catch (Exception e) {
-//            sendMessage(chatId, " Error getting data");
-//            log.error("Error sending rates", e);
-//        }
-//    }
-
     private void sendRates(Long chatId) {
         log.info("Request to get funding rates received");
         sendTypingAction(chatId);
@@ -123,41 +93,50 @@ public class TelegramChatService extends TelegramLongPollingBot {
         try {
             List<ArbitrageRates> rates = fundingService.calculateArbitrageRates();
 
+            if (rates.isEmpty()) {
+                sendMessage(chatId, "❌ No arbitrage rates available");
+                return;
+            }
+
             StringBuilder result = new StringBuilder();
             result.append("```\n");
 
             // Header
-            result.append(String.format("%-7s | %7s | %8s | %8s\n",
-                    "Ticker", "Max Arb",
-                    rates.getFirst().getFirstExchange().getDisplayName(),
-                    rates.getFirst().getSecondExchange().getDisplayName()));
+            result.append(String.format("%-7s |  OI  | %7s | %-14s\n",
+                    "Ticker", "Spread", "Pair"));
             result.append("-".repeat(40)).append("\n");
 
             // Data
             rates.stream()
                     .limit(10)
-                    .forEach(opp -> result.append(String.format("%-7s | %6.1f%% | %7.1f%% | %7.1f%%\n",
-                            opp.getSymbol(),
-                            opp.getArbitrageRate(),
-                            opp.getFirstRate(),
-                            opp.getSecondRate())));
+                    .forEach(opp -> {
+                        String oi = opp.getOiRank() != null ? "#" + String.format("%-3d", opp.getOiRank()) : "-  ";
+                        result.append(String.format(
+                                "%-7s | %s | %6.2f%% | %s/%s\n",
+                                opp.getSymbol(),
+                                oi,
+                                opp.getArbitrageRate(),
+                                opp.getFirstExchange().getDisplayName(),
+                                opp.getSecondExchange().getDisplayName()
+                        ));
+                    });
 
             result.append("```");
 
             sendMessage(chatId, result.toString());
+
         } catch (Exception e) {
             sendMessage(chatId, "❌ Error getting data");
             log.error("Error sending rates", e);
         }
     }
 
-
     private void calculatePositionPnl(Long chatId, String[] parts) {
         //Checking parameter
         if (parts.length < 2 || parts[1].trim().isEmpty()) {
             sendMessage(chatId,
-                    "🤖 *FundingBot:* *Usage:* `/close <position_id>`\n\n" +
-                            "*Example:* `/close P-0001`\n\n" +
+                    "🤖 *FundingBot:* Invalid position ID format\n\n" +
+                            "*Format:* `P-XXXX` (e.g. `P-0001`)\n\n" +
                             "Use /trades to see active positions");
             return;
         }
@@ -362,60 +341,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
         return sb.toString();
     }
 
-
-//    public String formatBalanceMap(Map<String, PositionBalance> balanceMap,
-//                                   Map<String, FundingCloseSignal> openedPositions) {
-//        if (balanceMap.isEmpty()) {
-//            return "🤖 *FundingBot:* Balance Tracker\n\n_No positions tracked yet_";
-//        }
-//
-//        StringBuilder sb = new StringBuilder();
-//        sb.append("🤖 *FundingBot:* Position Balances\n");
-//        sb.append("━━━━━━━━━━━━━━━━━━\n");
-//
-//        balanceMap.entrySet().stream()
-//                .sorted(Map.Entry.comparingByKey())
-//                .forEach(entry -> {
-//                    String positionId = entry.getKey();
-//                    PositionBalance balance = entry.getValue();
-//
-//                    String emoji;
-//
-//                    if (balance.isClosed()) {
-//                        // if closed - showing profit/loss
-//                        emoji = balance.getProfit() > 0 ? "✅" : "❌";
-//                        String profitSign = balance.getProfit() > 0 ? "+" : "";
-//
-//                        sb.append(String.format(
-//                                "%s *#%s*\n" +
-//                                        "   Before: $%.2f → After: $%.2f" +
-//                                        " (P&L: %s$%.2f)\n",
-//                                emoji,
-//                                positionId,
-//                                balance.getBalanceBefore(),
-//                                balance.getBalanceAfter(),
-//                                profitSign,
-//                                balance.getProfit()
-//                        ));
-//                    } else {
-//                        FundingCloseSignal position = openedPositions.get(positionId);
-//                        emoji = (position != null && position.getMode() == HoldingMode.FAST_MODE)
-//                                ? "⚡"
-//                                : "🧠";
-//
-//                        sb.append(String.format(
-//                                "%s *#%s*\n" +
-//                                        "   Before: $%.2f → After: _pending_\n",
-//                                emoji,
-//                                positionId,
-//                                balance.getBalanceBefore()
-//                        ));
-//                    }
-//                });
-//
-//        return sb.toString();
-//    }
-
     private String formatPositionOpenedMessage(PositionOpenedEvent event) {
         if (!event.isSuccess()) {
             if (event.getResult() != null &&
@@ -445,8 +370,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*ID:* `%s`\n" +
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
-                        "*Margin used:* %.2f USD\n" +
-                        "*Funding rate:* %s\n",
+                        "*Margin Used:* %.2f USD\n" +
+                        "*Funding Rate:* %.2f%%\n",
                 event.getPositionId(),
                 event.getMode(),
                 event.getTicker(),
@@ -476,11 +401,15 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*ID:* `%s`\n" +
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
+                        "*Funding Rate:* %.2f%%\n" +
+                        "*Reason:* %s\n" +
                         "*P&L:* " + sign + "%.2f USD (%.2f%%)\n",
                 pnlEmoji,
                 event.getPositionId(),
                 event.getMode(),
                 event.getTicker(),
+                event.getRate(),
+                event.getClosureReason(),
                 event.getPnl(),
                 event.getPercent()
         );

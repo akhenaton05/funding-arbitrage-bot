@@ -43,7 +43,7 @@ public class AsterDex implements Exchange {
     public int getOpenDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
             case EXTENDED -> 3000;  // Wait 3s for Extended to open
-//            case LIGHTER -> 3000;   // Wait 3s for Lighter to open
+            case LIGHTER -> 4000;   // Wait 3s for Lighter to open
             default -> 0;
         };
     }
@@ -52,7 +52,7 @@ public class AsterDex implements Exchange {
     public int getCloseDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
             case EXTENDED -> 3000;  // Wait 3s for Extended to close
-//            case LIGHTER -> 3500;   // Wait 3.5s for Lighter to close
+            case LIGHTER -> 1000;   // Wait 1s for Lighter to close
             default -> 0;
         };
     }
@@ -236,26 +236,26 @@ public class AsterDex implements Exchange {
     }
 
     @Override
-    public double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal) {
+    public double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal, Double prevFunding) {
         try {
             String symbol = formatSymbol(ticker);
 
             PremiumIndexResponse premium = asterClient.getPremiumIndexInfo(symbol);
             if (premium == null) {
                 log.warn("[Aster] Failed to get premium index for {}", symbol);
-                return 0.0;
+                return prevFunding;
             }
 
             long minutesUntilFunding = premium.getMinutesUntilFunding();
             if (minutesUntilFunding > 10) {
                 log.debug("[Aster] Funding too far: {} min", minutesUntilFunding);
-                return 0.0;
+                return prevFunding;
             }
 
             List<Position> positions = getPositions(ticker, direction);
             if (positions.isEmpty()) {
                 log.debug("[Aster] No position found for {} {}", ticker, direction);
-                return 0.0;
+                return prevFunding;
             }
 
             Position pos = positions.getFirst();
@@ -277,12 +277,54 @@ public class AsterDex implements Exchange {
                     String.format("%.2f", notional),
                     String.format("%.4f", fundingPnl));
 
-            return fundingPnl;
+            return fundingPnl + prevFunding;
 
         } catch (Exception e) {
             log.error("[Aster] Error calculating funding for {} {}: {}",
                     ticker, direction, e.getMessage());
-            return 0.0;
+            return prevFunding;
         }
+    }
+
+    @Override
+    public String placeStopLoss(String symbol, Direction direction, double stopPrice) {
+        String formattedSymbol = formatSymbol(symbol);
+
+        // Определяем side для SL (противоположный позиции)
+        String slSide = direction == Direction.LONG ? "SELL" : "BUY";
+        String positionSide = direction.toString(); // "LONG" or "SHORT"
+
+        return asterClient.placeStopLoss(
+                formattedSymbol,
+                slSide,
+                positionSide,
+                stopPrice
+        );
+    }
+
+    @Override
+    public String placeTakeProfit(String symbol, Direction direction, double tpPrice) {
+        String formattedSymbol = formatSymbol(symbol);
+
+        // Определяем side для TP (противоположный позиции)
+        String tpSide = direction == Direction.LONG ? "SELL" : "BUY";
+        String positionSide = direction.toString(); // "LONG" or "SHORT"
+
+        return asterClient.placeTakeProfit(
+                formattedSymbol,
+                tpSide,
+                positionSide,
+                tpPrice
+        );
+    }
+
+    @Override
+    public void cancelAllOrders(String symbol) {
+        asterClient.cancelAllOrders(formatSymbol(symbol));
+    }
+
+    @Override
+    public boolean supportsSlTp() {
+        return true;
     }
 }

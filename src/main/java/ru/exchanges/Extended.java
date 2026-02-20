@@ -36,10 +36,30 @@ public class Extended implements Exchange{
     }
 
     @Override
+    public String placeStopLoss(String symbol, Direction direction, double stopPrice) {
+        return "[Extended] TP/SL not yet supported by API";
+    }
+
+    @Override
+    public String placeTakeProfit(String symbol, Direction direction, double tpPrice) {
+        return "[Extended] TP/SL not yet supported by API";
+    }
+
+    @Override
+    public void cancelAllOrders(String symbol) {
+
+    }
+
+    @Override
+    public boolean supportsSlTp() {
+        return false;
+    }
+
+    @Override
     public int getOpenDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
             case ASTER -> 0;  // Wait 4s for Extended to open
-//            case LIGHTER -> 3000;   // Wait 3s for Lighter to open
+            case LIGHTER -> 0;   // Wait 3s for Lighter to open
             default -> 0;
         };
     }
@@ -48,7 +68,7 @@ public class Extended implements Exchange{
     public int getCloseDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
             case ASTER -> 0;  // Wait 3s for Extended to close
-//            case LIGHTER -> 3500;   // Wait 3.5s for Lighter to close
+            case LIGHTER -> 0;   // Wait 3.5s for Lighter to close
             default -> 0;
         };
     }
@@ -196,17 +216,8 @@ public class Extended implements Exchange{
         }
     }
 
-//    @Override
-//    public double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal) {
-//        ExtendedFundingHistoryResponse response = extendedClient.getFundingHistory(formatSymbol(ticker), direction.name(), signal.getOpenedAtMs(), 1000);
-//        log.info("[Extended] Got response from funding history: {}", response);
-//        log.info("[Extended] Accumulated funding fee: {}", response.getData().getFirst().getFundingFee());
-//        log.info("[Extended] Accumulated funding fee from Summery: {}", response.getSummary().getNetFunding());
-//        return Double.parseDouble(response.getData().getFirst().getFundingFee());
-//    }
-
     @Override
-    public double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal) {
+    public double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal, Double prevFunding) {
         try {
             //Waiting 40 seconds for data to load up
             Thread.sleep(40000);
@@ -237,9 +248,6 @@ public class Extended implements Exchange{
                 return cumulative;
             }
 
-            // ============================================
-            // ВАРИАНТ 2: Вручную суммируем Data (если Summary нет)
-            // ============================================
             if (response.getData() != null && !response.getData().isEmpty()) {
                 double totalFunding = 0.0;
                 int validPayments = 0;

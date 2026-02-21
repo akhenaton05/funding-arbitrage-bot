@@ -88,7 +88,7 @@ public class Lighter implements Exchange {
     }
 
     @Override
-    public int getMaxLeverage(String symbol) {
+    public int getMaxLeverage(String symbol, int leverage) {
         return lighterClient.getMaxLeverage(formatSymbol(symbol));
     }
 

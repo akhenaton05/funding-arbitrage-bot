@@ -56,7 +56,7 @@ public class FundingArbitrageService {
         this.eventPublisher = eventPublisher;
     }
 
-    @Scheduled(cron = "0 54 * * * *")
+    @Scheduled(cron = "0 16 * * * *")
     private void fundingTracker() {
         try {
             List<ArbitrageRates> arbitrageRates = calculateArbitrageRates();

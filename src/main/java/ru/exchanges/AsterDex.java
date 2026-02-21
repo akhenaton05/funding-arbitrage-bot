@@ -14,6 +14,7 @@ import ru.dto.exchanges.aster.PremiumIndexResponse;
 import ru.dto.funding.FundingCloseSignal;
 import ru.dto.funding.PositionPnLData;
 import ru.exceptions.ClosingPositionException;
+import ru.exceptions.OpeningPositionException;
 import ru.mapper.aster.AsterOrderBookMapper;
 import ru.mapper.aster.AsterPositionMapper;
 
@@ -78,7 +79,7 @@ public class AsterDex implements Exchange {
 
         return Balance.builder()
                 .balance(balance)
-                .margin(balance * 0.85) //85% of balance for slippage and fees
+                .margin(balance * 0.08) //85% of balance for slippage and fees
                 .build();
     }
 
@@ -159,12 +160,24 @@ public class AsterDex implements Exchange {
 
     @Override
     public String setLeverage(String symbol, int leverage){
-        return asterClient.setLeverage(formatSymbol(symbol), leverage);
+        if (asterClient.setLeverage(formatSymbol(symbol), leverage)) {
+            return "[AsterDex] Leverage " + leverage +" was set for $" + symbol;
+        } else throw new OpeningPositionException("[AsterDex] Error setting leverage");
     }
 
     @Override
-    public int getMaxLeverage(String symbol) {
-        return asterClient.getMaxLeverage(formatSymbol(symbol));
+    public int getMaxLeverage(String symbol, int leverage) {
+        int max = asterClient.getMaxLeverage(formatSymbol(symbol));
+        int current = Math.min(leverage, max);
+
+        while (current >= 1) {
+            if (asterClient.setLeverage(formatSymbol(symbol), current)) {
+                return current;
+            }
+            current--;
+        }
+
+        throw new OpeningPositionException("[AsterDex] No allowed leverage for " + symbol);
     }
 
     @Override

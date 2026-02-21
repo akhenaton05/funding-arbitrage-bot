@@ -136,9 +136,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
         //Checking parameter
         if (parts.length < 2 || parts[1].trim().isEmpty()) {
             sendMessage(chatId,
-                    "🤖 *FundingBot:* Invalid position ID format\n\n" +
-                            "*Format:* `P-XXXX` (e.g. `P-0001`)\n\n" +
-                            "Use /trades to see active positions");
+                    """
+                            🤖 *FundingBot:* Invalid position ID format
+                            
+                            *Format:* `P-XXXX` (e.g. `P-0001`)
+                            
+                            Use /trades to see active positions""");
             return;
         }
 
@@ -147,9 +150,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
         //Checking the format ID (P-0001, P-0002...)
         if (!positionId.matches("P-\\d{4}")) {
             sendMessage(chatId,
-                    "🤖 *FundingBot:* Invalid position ID format\n\n" +
-                            "*Format:* `P-XXXX` (e.g. `P-0001`)\n\n" +
-                            "Use /trades to see active positions");
+                    """
+                            🤖 *FundingBot:* Invalid position ID format
+                            
+                            *Format:* `P-XXXX` (e.g. `P-0001`)
+                            
+                            Use /trades to see active positions""");
             return;
         }
         PositionPnLData posData = exchangesService.pnlPositionCalculator(positionId);
@@ -168,9 +174,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
         //Checking parameter
         if (parts.length < 2 || parts[1].trim().isEmpty()) {
             sendMessage(chatId,
-                    "🤖 *FundingBot:* *Usage:* `/close <position_id>`\n\n" +
-                            "*Example:* `/close P-0001`\n\n" +
-                            "Use /trades to see active positions");
+                    """
+                            🤖 *FundingBot:* *Usage:* `/close <position_id>`
+                            
+                            *Example:* `/close P-0001`
+                            
+                            Use /trades to see active positions""");
             return;
         }
 
@@ -179,9 +188,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
         //Checking the format ID (P-0001, P-0002...)
         if (!positionId.matches("P-\\d{4}")) {
             sendMessage(chatId,
-                    "🤖 *FundingBot:* Invalid position ID format\n\n" +
-                            "*Format:* `P-XXXX` (e.g. `P-0001`)\n\n" +
-                            "Use /trades to see active positions");
+                    """
+                            🤖 *FundingBot:* Invalid position ID format
+                            
+                            *Format:* `P-XXXX` (e.g. `P-0001`)
+                            
+                            Use /trades to see active positions""");
             return;
         }
 

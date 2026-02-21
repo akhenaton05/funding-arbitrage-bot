@@ -192,30 +192,45 @@ public class AsterClient {
     /**
      * Leverage
      */
+//
+//    public String setLeverage(String symbol, int leverage) {
+//        StringBuilder params = new StringBuilder();
+//        params.append("symbol=").append(symbol);
+//        params.append("&leverage=").append(leverage);
+//
+//        String response = executeSignedRequest("POST", "/fapi/v1/leverage", params.toString());
+//
+//        log.info("[Aster] setLeverage response for {}: {}", symbol, response);
+//
+//        if (response != null && !response.isEmpty()) {
+//            try {
+//                JsonNode node = objectMapper.readTree(response);
+//                int code = node.path("code").asInt(200);
+//                if (code != 200) {
+//                    log.error("[Aster] setLeverage failed for {} code={} msg={}",
+//                            symbol, code, node.path("msg").asText());
+//                    return null;
+//                }
+//            } catch (Exception e) {
+//                log.warn("[Aster] Failed to parse setLeverage response", e);
+//            }
+//        }
+//        return response;
+//    }
 
-    public String setLeverage(String symbol, int leverage) {
+    public boolean setLeverage(String symbol, int leverage) {
         StringBuilder params = new StringBuilder();
         params.append("symbol=").append(symbol);
         params.append("&leverage=").append(leverage);
 
         String response = executeSignedRequest("POST", "/fapi/v1/leverage", params.toString());
 
-        log.info("[Aster] setLeverage response for {}: {}", symbol, response);
-
-        if (response != null && !response.isEmpty()) {
-            try {
-                JsonNode node = objectMapper.readTree(response);
-                int code = node.path("code").asInt(200);
-                if (code != 200) {
-                    log.error("[Aster] setLeverage failed for {} code={} msg={}",
-                            symbol, code, node.path("msg").asText());
-                    return null;
-                }
-            } catch (Exception e) {
-                log.warn("[Aster] Failed to parse setLeverage response", e);
-            }
+        if (Objects.isNull(response)) {
+            return false;  // -2030 or other non-success
         }
-        return response;
+
+        log.info("[Aster] setLeverage response for {}: {}", symbol, response);
+        return true;
     }
 
     public int getMaxLeverage(String symbol) {
@@ -605,7 +620,19 @@ public class AsterClient {
 
             String result = executeSignedRequest("POST", "/fapi/v1/order", params.toString());
 
-            log.info("[Aster] Close order sent, validating position closure...");
+            String closeOrderId = null;
+            try {
+                OrderResponse closeResp = objectMapper.readValue(result, OrderResponse.class);
+                closeOrderId = closeResp.getOrderId() != null
+                        ? String.valueOf(closeResp.getOrderId())
+                        : closeResp.getClientOrderId();
+                log.info("[Aster] Close orderId parsed: {}", closeOrderId);
+            } catch (Exception e) {
+                log.warn("[Aster] Failed to parse closeOrderId from response: {}", result);
+                closeOrderId = result;
+            }
+
+            log.info("[Aster] Close order sent, validating position closure");
 
             boolean closed = waitPositionClosed(symbol, positionSide, 10.0);
 
@@ -618,7 +645,7 @@ public class AsterClient {
             return OrderResult.builder()
                     .exchange(ExchangeType.ASTER)
                     .symbol(symbol)
-                    .orderId(result)
+                    .orderId(closeOrderId)
                     .success(true)
                     .message("Position closed successfully")
                     .build();
@@ -820,6 +847,18 @@ public class AsterClient {
         if (code >= 200 && code < 300) {
             return body;
         }
+
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            int errorCode = root.path("code").asInt(code);
+            String msg = root.path("msg").asText();
+
+            if (code == 400 && errorCode == -2030) {
+                log.warn("[Aster] Bracket limit for leverage: {}", msg);
+                return null;
+            }
+        } catch (Exception ignored) {}
+
         log.error("[Aster] API Error: code={}, body={}", code, body);
         throw new RuntimeException("[Aster] API error: " + code + " → " + body);
     }
@@ -1033,4 +1072,185 @@ public class AsterClient {
             return null;
         }
     }
+
+    public AsterTrade getTradeResultByOrderId(String symbol, Long orderId) {
+        try {
+            String queryParams = "symbol=" + symbol + "&orderId=" + orderId + "&limit=100";
+            String json = executeSignedRequest("GET", "/fapi/v1/userTrades", queryParams);
+
+            if (json == null || json.isBlank()) {
+                log.warn("[Aster] getTradeResult: empty response for symbol={}, orderId={}", symbol, orderId);
+                return null;
+            }
+
+            List<AsterTrade> trades = objectMapper.readValue(
+                    json,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, AsterTrade.class)
+            );
+
+            if (trades == null || trades.isEmpty()) {
+                log.info("[Aster] getTradeResult: no trades found for symbol={}, orderId={}", symbol, orderId);
+                return null;
+            }
+
+            List<AsterTrade> orderTrades = trades.stream()
+                    .filter(t -> orderId.equals(t.getOrderId()))
+                    .toList();
+
+            if (orderTrades.isEmpty()) {
+                log.info("[Aster] getTradeResult: no trades matched orderId={}", orderId);
+                return null;
+            }
+
+            // Суммируем по всем трейдам ордера (ордер мог исполниться частями)
+            double totalPnl = orderTrades.stream()
+                    .mapToDouble(t -> {
+                        try { return Double.parseDouble(t.getRealizedPnl()); }
+                        catch (Exception e) { return 0.0; }
+                    }).sum();
+
+            double totalCommission = orderTrades.stream()
+                    .mapToDouble(t -> {
+                        try { return Double.parseDouble(t.getCommission()); }
+                        catch (Exception e) { return 0.0; }
+                    }).sum();
+
+            double totalQty = orderTrades.stream()
+                    .mapToDouble(t -> {
+                        try { return Double.parseDouble(t.getQty()); }
+                        catch (Exception e) { return 0.0; }
+                    }).sum();
+
+            double totalQuoteQty = orderTrades.stream()
+                    .mapToDouble(t -> {
+                        try { return Double.parseDouble(t.getQuoteQty()); }
+                        catch (Exception e) { return 0.0; }
+                    }).sum();
+
+            // Средняя цена исполнения
+            double avgPrice = totalQty > 0 ? totalQuoteQty / totalQty : 0.0;
+
+            // Берём мета-данные из последнего трейда
+            AsterTrade last = orderTrades.getLast();
+
+            // Собираем итоговый объект
+            AsterTrade result = new AsterTrade();
+            result.setOrderId(orderId);
+            result.setSymbol(symbol);
+            result.setSide(last.getSide());
+            result.setPositionSide(last.getPositionSide());
+            result.setPrice(String.valueOf(avgPrice));
+            result.setQty(String.valueOf(totalQty));
+            result.setQuoteQty(String.valueOf(totalQuoteQty));
+            result.setCommission(String.valueOf(totalCommission));
+            result.setCommissionAsset(last.getCommissionAsset());
+            result.setRealizedPnl(String.valueOf(totalPnl));
+            result.setTime(last.getTime());
+            result.setMaker(last.getMaker());
+            result.setBuyer(last.getBuyer());
+
+            log.info("[Aster] getTradeResult: symbol={}, orderId={}, trades={}, avgPrice={}, qty={}, quoteQty={}, commission={}, realizedPnl={}",
+                    symbol, orderId, orderTrades.size(), avgPrice, totalQty, totalQuoteQty, totalCommission, totalPnl);
+
+            return result;
+
+        } catch (Exception e) {
+            log.error("[Aster] getTradeResult error for symbol={}, orderId={}", symbol, orderId, e);
+            return null;
+        }
+    }
+//
+//    public Map<String, Object> checkNotionalLimits(String symbol, int leverage) {
+//        Map<String, Object> result = new LinkedHashMap<>();
+//        result.put("symbol", symbol);
+//        result.put("leverage", leverage);
+//
+//        // Пробуем выставить leverage, если -2030 — фиксируем как недоступный
+//        boolean leverageSet = false;
+//        try {
+//            setLeverage(symbol, leverage);
+//            leverageSet = true;
+//        } catch (RuntimeException e) {
+//            if (e.getMessage().contains("-2030")) {
+//                result.put("leverage_available", false);
+//                result.put("reason", "bracket_limit_exceeded");
+//                // Всё равно читаем positionRisk с текущим leverage
+//            } else {
+//                throw e;
+//            }
+//        }
+//
+//        result.put("leverage_available", leverageSet);
+//
+//        String query = "symbol=" + symbol;
+//        String json = executeSignedRequest("GET", "/fapi/v2/positionRisk", query);
+//        if (json == null) {
+//            result.put("error", "No response");
+//            return result;
+//        }
+//
+//        try {
+//            List<AsterPosition> positions = objectMapper.readValue(json,
+//                    objectMapper.getTypeFactory().constructCollectionType(List.class, AsterPosition.class));
+//
+//            for (AsterPosition pos : positions) {
+//                String side = pos.getPositionSide();
+//                double maxNotional = pos.getMaxNotionalValue();
+//                double posAmt = 0, markPrice = 0;
+//                try {
+//                    posAmt = Math.abs(Double.parseDouble(pos.getPositionAmt()));
+//                    markPrice = Double.parseDouble(pos.getMarkPrice());
+//                } catch (Exception ignored) {}
+//
+//                double currentNotional = posAmt * markPrice;
+//                double remaining = maxNotional - currentNotional;
+//
+//                result.put(side + "_maxNotional", maxNotional);
+//                result.put(side + "_currentNotional", currentNotional);
+//                result.put(side + "_remaining", remaining);
+//                result.put(side + "_canOpen", leverageSet && remaining > 0);
+//            }
+//        } catch (Exception e) {
+//            result.put("error", e.getMessage());
+//        }
+//
+//        return result;
+//    }
+//
+//    public String getRawPositionRisk(String symbol) {
+//        String query = "symbol=" + symbol;
+//        return executeSignedRequest("GET", "/fapi/v2/positionRisk", query);
+//    }
+//
+//    public boolean trySetLeverage(String symbol, int leverage) {
+//        try {
+//            setLeverage(symbol, leverage);
+//            return true;
+//        } catch (RuntimeException e) {
+//            String msg = e.getMessage();
+//            if (msg != null && msg.contains("\"code\":-2030")) {
+//                log.warn("[Aster] Leverage {}x for {} not allowed (platform bracket limit)", leverage, symbol);
+//                return false;
+//            }
+//            throw e;
+//        }
+//    }
+//
+//    /**
+//     * Подбирает рабочий левередж, начиная с desiredLeverage и уменьшая до minLeverage включительно.
+//     * Возвращает -1, если ничего не подошло.
+//     */
+//    public int findWorkingLeverage(String symbol, int desiredLeverage, int minLeverage) {
+//        for (int lev = desiredLeverage; lev >= minLeverage; lev--) {
+//            if (trySetLeverage(symbol, lev)) {
+//                log.info("[Aster] Using leverage {}x for {}", lev, symbol);
+//                return lev;
+//            }
+//        }
+//        log.warn("[Aster] No leverage in [{}, {}] is allowed for {}", minLeverage, desiredLeverage, symbol);
+//        return -1;
+//    }
+
+
+
 }

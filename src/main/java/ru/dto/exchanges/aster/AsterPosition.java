@@ -16,4 +16,14 @@ public class AsterPosition {
     private String markPrice;
     @JsonProperty("unRealizedProfit")
     private String unrealizedProfit;
+    @JsonProperty("maxNotionalValue")
+    private String maxNotionalValue;
+
+    public double getMaxNotionalValue() {
+        try {
+            return maxNotionalValue != null ? Double.parseDouble(maxNotionalValue) : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
 }

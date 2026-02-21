@@ -24,7 +24,7 @@ public interface Exchange {
 
     String setLeverage(String symbol, int leverage);
 
-    int getMaxLeverage(String symbol);
+    int getMaxLeverage(String symbol, int leverage);
 
     double getFundingRate(String symbol);
 

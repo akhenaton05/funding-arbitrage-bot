@@ -243,7 +243,7 @@ public class ExchangesService {
             }
         }
 
-        if (marginBalance <= 10) {
+        if (marginBalance <= 1) {
             String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
 
@@ -266,13 +266,13 @@ public class ExchangesService {
         //Max leverage for ticker validation for Aster leverage
         if (exchangeOne.getType().equals(ExchangeType.ASTER) || exchangeTwo.getType().equals(ExchangeType.ASTER)) {
             Exchange ast = exchangeOne.getType().equals(ExchangeType.ASTER) ? exchangeOne : exchangeTwo;
-            leverage = Math.min(signal.getLeverage(), validateLeverage(signal.getTicker(), ast));
+            leverage = validateLeverage(signal.getTicker(), ast, leverage);
         }
 
         //Max leverage for ticker validation for Lighter leverage
         if (exchangeOne.getType().equals(ExchangeType.LIGHTER) || exchangeTwo.getType().equals(ExchangeType.LIGHTER)) {
             Exchange lighter = exchangeOne.getType().equals(ExchangeType.LIGHTER) ? exchangeOne : exchangeTwo;
-            int lighterMaxLeverage = lighter.getMaxLeverage(signal.getTicker());
+            int lighterMaxLeverage = lighter.getMaxLeverage(signal.getTicker(), leverage);
             leverage = Math.min(leverage, lighterMaxLeverage);
             log.info("[FundingBot] Lighter max leverage for {}: {}x", signal.getTicker(), lighterMaxLeverage);
         }
@@ -695,9 +695,9 @@ public class ExchangesService {
         return true;
     }
 
-    public int validateLeverage(String symbol, Exchange ex) {
+    public int validateLeverage(String symbol, Exchange ex, int leverage) {
 
-        int asterLeverage = ex.getMaxLeverage(symbol);
+        int asterLeverage = ex.getMaxLeverage(symbol, leverage);
 
         log.info("[FundingBot] Aster leverage for {}: {}",
                 symbol, asterLeverage);

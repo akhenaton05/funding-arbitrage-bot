@@ -927,6 +927,7 @@ def get_recent_trades(market: str):
         logger.exception("get_recent_trades failed")
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
+
 @app.route("/market/<market>/execution-price", methods=["POST"])
 def estimate_execution_price(market: str):
     """
@@ -1006,6 +1007,27 @@ def estimate_execution_price(market: str):
     except Exception as e:
         logger.exception("estimate_execution_price failed")
         return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/positions/history', methods=['GET'])
+def get_positions_history():
+    market = request.args.get('market')
+    side = request.args.get('side')
+    try:
+        params = {}
+        if market:
+            params['market'] = market
+        if side:
+            params['side'] = side.upper()
+
+        status, data = _submit(
+            _extended_get('/api/v1/user/positions/history', params=params),
+            timeout_sec=30
+        )
+        return jsonify(data), status
+    except Exception as e:
+        logger.exception("get_positions_history failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 if __name__ == "__main__":

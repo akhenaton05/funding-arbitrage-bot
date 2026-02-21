@@ -1143,91 +1143,75 @@ async def close_position():
 
 @app.route('/market/<symbol>/max-leverage', methods=['GET'])
 async def get_max_leverage(symbol: str):
-    """Получить max leverage для рынка (гибридный подход)"""
+    """Получить max leverage для рынка с правильным приоритетом"""
     try:
-        metadata = await get_market_metadata(symbol)
-        market_id = metadata['market_id']
-        symbol_upper = symbol.upper()
+        symbol_upper = symbol.upper().replace('-USDC', '').replace('/USDC', '')
 
-        logger.info(f"🎚️ Getting max leverage for {symbol} (id={market_id})")
+        logger.info(f"🎚️ Getting max leverage for {symbol} ({symbol_upper})")
 
-        # 1. Кэш
-        if symbol_upper in MAX_LEVERAGE_CACHE:
-            cached = MAX_LEVERAGE_CACHE[symbol_upper]
-            logger.info(f"   ✅ From cache: {cached}x")
+        # 1. ХАРДКОД — самый высокий приоритет (всегда доверяем ему больше, чем кэшу)
+        if symbol_upper in KNOWN_MAX_LEVERAGE:
+            hardcoded = KNOWN_MAX_LEVERAGE[symbol_upper]
+            logger.info(f"   ✅ From HARDCODE: {hardcoded}x")
+            # Можно обновить кэш, чтобы в следующий раз быстрее
+            MAX_LEVERAGE_CACHE[symbol_upper] = hardcoded
             return jsonify({
                 "status": "OK",
                 "market": symbol,
-                "market_id": market_id,
+                "max_leverage": hardcoded,
+                "source": "hardcoded (priority)"
+            }), 200
+
+        # 2. КЭШ — только если хардкода нет
+        if symbol_upper in MAX_LEVERAGE_CACHE:
+            cached = MAX_LEVERAGE_CACHE[symbol_upper]
+            logger.info(f"   ✅ From CACHE: {cached}x")
+            return jsonify({
+                "status": "OK",
+                "market": symbol,
                 "max_leverage": cached,
                 "source": "cache"
             }), 200
 
-        # 2. Открытая позиция
+        # 3. Позиция (если есть открытая)
         try:
             account_api = lighter.AccountApi(api_client)
-            raw = await asyncio.wait_for(
-                account_api.account(by="index", value=str(ACCOUNT_INDEX)),
-                timeout=5.0
-            )
+            raw = await account_api.account(by="index", value=str(ACCOUNT_INDEX))
+
             if hasattr(raw, 'accounts') and raw.accounts:
                 positions = raw.accounts[0].positions or []
                 for pos in positions:
                     pos_symbol = (getattr(pos, 'symbol', '') or '').upper()
                     clean_pos = pos_symbol.replace('-USDC', '').replace('/USDC', '')
 
-                    if clean_pos == symbol_upper or pos_symbol == symbol_upper:
+                    if clean_pos == symbol_upper:
                         imf = float(getattr(pos, 'initial_margin_fraction', 0) or 0)
                         if imf > 0:
-                            max_leverage = int(round(100 / imf))
-
-                            # Хардкод имеет приоритет над IMF из позиции
-                            if symbol_upper in KNOWN_MAX_LEVERAGE:
-                                max_leverage = KNOWN_MAX_LEVERAGE[symbol_upper]
-
-                            MAX_LEVERAGE_CACHE[symbol_upper] = max_leverage
-                            logger.info(f"   ✅ From position: {max_leverage}x (IMF={imf})")
+                            real_leverage = int(round(100 / imf))
+                            MAX_LEVERAGE_CACHE[symbol_upper] = real_leverage
+                            logger.info(f"   ✅ From OPEN POSITION: {real_leverage}x (IMF={imf})")
                             return jsonify({
                                 "status": "OK",
                                 "market": symbol,
-                                "market_id": market_id,
-                                "max_leverage": max_leverage,
-                                "initial_margin_fraction": imf,
-                                "source": "account_position"
+                                "max_leverage": real_leverage,
+                                "source": "open_position"
                             }), 200
-        except Exception as e:
-            logger.debug(f"Failed to get positions for leverage: {e}")
+        except Exception as pos_err:
+            logger.debug(f"   Failed to check open position: {pos_err}")
 
-        # 3. Хардкод
-        if symbol_upper in KNOWN_MAX_LEVERAGE:
-            max_leverage = KNOWN_MAX_LEVERAGE[symbol_upper]
-            MAX_LEVERAGE_CACHE[symbol_upper] = max_leverage
-            logger.info(f"   ✅ From hardcode: {max_leverage}x")
-            return jsonify({
-                "status": "OK",
-                "market": symbol,
-                "market_id": market_id,
-                "max_leverage": max_leverage,
-                "source": "hardcoded"
-            }), 200
-
-        # 4. Default
+        # 4. Дефолт, если ничего нет
         default_leverage = 3
         MAX_LEVERAGE_CACHE[symbol_upper] = default_leverage
-        logger.info(f"   ⚠️ Using default: {default_leverage}x")
+        logger.info(f"   ⚠️ Using DEFAULT: {default_leverage}x")
         return jsonify({
             "status": "OK",
             "market": symbol,
-            "market_id": market_id,
             "max_leverage": default_leverage,
             "source": "default"
         }), 200
 
-    except ValueError as ve:
-        logger.error(f"Market not found: {ve}")
-        return jsonify({"status": "ERROR", "message": str(ve)}), 404
     except Exception as e:
-        logger.error(f"Max leverage error: {e}", exc_info=True)
+        logger.error(f"Max leverage error for {symbol}: {e}", exc_info=True)
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
 

@@ -16,10 +16,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
+import java.util.*;
 
 @Slf4j
 @Setter
@@ -820,4 +817,65 @@ public class ExtendedClient {
             return null;
         }
     }
+
+    public ExtendedPositionHistory getLastClosedPosition(String market, String side) {
+        try {
+            String url = baseUrl + "/positions/history?market=" + market + "&side=" + side.toUpperCase();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(30))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                log.error("[Extended] getLastClosedPosition failed code={}, body={}", response.statusCode(), response.body());
+                return null;
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> result = objectMapper.readValue(response.body(), Map.class);
+            Object realisedPnl = result.get("realised_pnl");
+
+            // Парсим data[] напрямую
+            List<ExtendedPositionHistory> positions = objectMapper.convertValue(
+                    result.get("data"),
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, ExtendedPositionHistory.class)
+            );
+
+            if (positions == null || positions.isEmpty()) {
+                log.info("[Extended] getLastClosedPosition: no history for market={}, side={}", market, side);
+                return null;
+            }
+
+            // Берём с максимальным closedTime
+            ExtendedPositionHistory latest = positions.stream()
+                    .filter(p -> p.getClosedTime() != null)
+                    .max(Comparator.comparingLong(ExtendedPositionHistory::getClosedTime))
+                    .orElse(positions.getFirst());
+
+            log.info("[Extended] Last closed position: market={}, side={}, realisedPnl={}, tradePnl={}, openFees={}, closeFees={}, fundingFees={}, openPrice={}, exitPrice={}, size={}, closedTime={}",
+                    latest.getMarket(),
+                    latest.getSide(),
+                    latest.getRealisedPnl(),
+                    latest.getRealisedPnlBreakdown() != null ? latest.getRealisedPnlBreakdown().getTradePnl() : "n/a",
+                    latest.getRealisedPnlBreakdown() != null ? latest.getRealisedPnlBreakdown().getOpenFees() : "n/a",
+                    latest.getRealisedPnlBreakdown() != null ? latest.getRealisedPnlBreakdown().getCloseFees() : "n/a",
+                    latest.getRealisedPnlBreakdown() != null ? latest.getRealisedPnlBreakdown().getFundingFees() : "n/a",
+                    latest.getOpenPrice(),
+                    latest.getExitPrice(),
+                    latest.getSize(),
+                    latest.getClosedTime()
+            );
+
+            return latest;
+
+        } catch (Exception e) {
+            log.error("[Extended] Error getting last position for market={}, side={}", market, side, e);
+            return null;
+        }
+    }
+
+
 }

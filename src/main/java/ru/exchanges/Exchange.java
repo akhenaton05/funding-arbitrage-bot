@@ -53,4 +53,6 @@ public interface Exchange {
     String placeTakeProfit(String symbol, Direction direction, double tpPrice);
 
     boolean supportsSlTp();
+
+//    double calculatePnl(FundingCloseSignal signal);
 }

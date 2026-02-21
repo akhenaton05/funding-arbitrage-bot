@@ -876,6 +876,4 @@ public class ExtendedClient {
             return null;
         }
     }
-
-
 }

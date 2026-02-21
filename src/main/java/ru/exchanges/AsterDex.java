@@ -7,10 +7,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.stereotype.Service;
 import ru.client.aster.AsterClient;
 import ru.dto.exchanges.*;
-import ru.dto.exchanges.aster.AsterBookTicker;
-import ru.dto.exchanges.aster.AsterPosition;
-import ru.dto.exchanges.aster.OrderResponse;
-import ru.dto.exchanges.aster.PremiumIndexResponse;
+import ru.dto.exchanges.aster.*;
 import ru.dto.funding.FundingCloseSignal;
 import ru.dto.funding.PositionPnLData;
 import ru.exceptions.ClosingPositionException;
@@ -147,7 +144,16 @@ public class AsterDex implements Exchange {
                 }
             }
 
-            return asterClient.closePosition(formatSymbol(symbol));
+            OrderResult result = asterClient.closePosition(formatSymbol(symbol));
+            log.info("[AsterDex] Order closed with result: {}", result);
+
+            //PnL Calculation(Funding fees not included)
+            AsterTrade tradeResult = asterClient.getTradeResultByOrderId(formatSymbol(symbol), Long.valueOf(result.getOrderId()));
+            log.info("[AsterDex] Trade result for {}: {}", result.getOrderId(), tradeResult);
+
+            result.setRealizedPnl(Double.valueOf(tradeResult.getRealizedPnl()));
+
+            return result;
 
         } catch (InterruptedException e) {
             log.error("[Aster] Interrupted during close delay", e);

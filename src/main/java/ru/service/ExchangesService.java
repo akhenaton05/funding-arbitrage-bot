@@ -600,6 +600,12 @@ public class ExchangesService {
                         String.format("%.4f", pnlDataBefore.getNetPnl()));
             }
 
+            double finalPnL = firstFuture.get().getRealizedPnl() + secondFuture.get().getRealizedPnl();
+            log.info("[FindingBot] got final pnl from api data: {}, no funding fees applied", finalPnL);
+
+            finalPnL += pnlDataBefore.getTotalFundingNet();
+            log.info("[FindingBot] got final pnl from api data: {}, with funding fees applied", finalPnL);
+
             //Waiting 20 sec for data to load up
             Thread.sleep(20000);
 
@@ -614,9 +620,10 @@ public class ExchangesService {
 
             if (pnlDataBefore != null) {
                 double difference = profit - pnlDataBefore.getNetPnl();
-                log.info("[FundingBot] Calculated P&L: ${} | Actual: ${} | Difference: ${} ({}%)",
+                log.info("[FundingBot] Calculated P&L: ${} | Actual: ${} | API: ${} | Difference: ${} ({}%)",
                         String.format("%.4f", pnlDataBefore.getNetPnl()),
                         String.format("%.4f", profit),
+                        String.format("%.4f", finalPnL),
                         String.format("%.4f", difference),
                         String.format("%.2f", Math.abs(difference / profit) * 100));
             }
@@ -633,6 +640,7 @@ public class ExchangesService {
                     signal.getId(),
                     signal.getTicker(),
                     profit,
+                    finalPnL,
                     profitPercent,
                     true,
                     signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
@@ -650,6 +658,7 @@ public class ExchangesService {
             eventPublisher.publishEvent(new PositionClosedEvent(
                     signal.getId(),
                     signal.getTicker(),
+                    0,
                     0,
                     0,
                     false,

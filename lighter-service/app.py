@@ -967,7 +967,6 @@ async def close_position():
                     pos_symbol.upper() == symbol.upper() or
                     pos_symbol.upper().replace('-USDC', '') == symbol.upper()
                 )
-
                 if market_match and pos_side == current_side:
                     position = pos
                     break
@@ -989,7 +988,12 @@ async def close_position():
         if size <= 0:
             return jsonify({"status": "ERROR", "message": "Position size is 0"}), 400
 
-        logger.info(f"🔄 Closing {current_side} position: {symbol}, size={size}")
+        # ─── Сохраняем данные ДО закрытия ───────────────────────────────────────
+        entry_price_val = float(getattr(position, 'avg_entry_price', 0) or 0)
+        realized_pnl_before = float(getattr(position, 'realized_pnl', 0) or 0)
+        # ────────────────────────────────────────────────────────────────────────
+
+        logger.info(f"🔄 Closing {current_side} position: {symbol}, size={size}, entry={entry_price_val}")
 
         close_side = 'SELL' if current_side == 'LONG' else 'BUY'
 
@@ -1004,9 +1008,8 @@ async def close_position():
         real_price = await get_real_market_price(market_id, metadata['symbol'], close_side)
 
         if real_price is None:
-            entry_price = float(getattr(position, 'avg_entry_price', 0) or 0)
-            if entry_price > 0:
-                real_price = entry_price
+            if entry_price_val > 0:
+                real_price = entry_price_val
                 logger.info(f"   📊 Using entry price: ${real_price:.2f}")
             else:
                 return jsonify({
@@ -1025,7 +1028,6 @@ async def close_position():
 
         logger.info(f"   {close_side} {size} {symbol} @ market")
         logger.info(f"   real=${real_price:.2f}, worst=${worst_price:.2f} (slippage={slippage_pct}%)")
-        logger.info(f"   base_amount={base_amount_int}, price={price_int}")
 
         response = await signer_client.create_order(
             market_index=market_id,
@@ -1058,7 +1060,6 @@ async def close_position():
 
         if error_msg and 'reduce' in error_msg.lower():
             logger.warning(f"   ⚠️ Retrying without reduce_only...")
-
             client_order_index = int(datetime.utcnow().timestamp() * 1000) % 2147483647
 
             response = await signer_client.create_order(
@@ -1112,16 +1113,33 @@ async def close_position():
                         break
 
             if not still_open:
-                logger.info(f"   ✅ Position confirmed CLOSED")
+                # ─── Считаем trade PnL ─────────────────────────────────────────
+                trade_pnl = 0.0
+                try:
+                    if current_side == 'LONG':
+                        trade_pnl = (real_price - entry_price_val) * size
+                    else:
+                        trade_pnl = (entry_price_val - real_price) * size
+                except Exception:
+                    pass
+                # ────────────────────────────────────────────────────────────────
+
+                logger.info(f"   ✅ Position confirmed CLOSED, trade_pnl={trade_pnl:.6f}")
+
                 return jsonify({
                     "status": "success",
                     "message": "Position closed successfully",
                     "market": symbol,
                     "size": str(size),
                     "side": close_side,
-                    "tx_hash": tx_hash
+                    "tx_hash": tx_hash,
+                    "entry_price": str(entry_price_val),
+                    "exit_price": str(real_price),
+                    "trade_pnl": str(round(trade_pnl, 6)),
+                    "realized_pnl": str(realized_pnl_before)
                 }), 200
 
+        # позиция ещё открыта или не удалось проверить
         return jsonify({
             "status": "submitted",
             "message": "Close order submitted but position may still be open",
@@ -1135,6 +1153,7 @@ async def close_position():
     except Exception as e:
         logger.error(f"Close error: {e}", exc_info=True)
         return jsonify({"status": "ERROR", "message": str(e)}), 500
+
 
 
 # ============================================

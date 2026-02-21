@@ -79,6 +79,7 @@ public class Lighter implements Exchange {
 
     @Override
     public OrderResult closePosition(String symbol, Direction currentSide) {
+        //Lighter calculates PnL right before closing the position
         return lighterClient.closePositionWithResult(formatSymbol(symbol), currentSide.toString());
     }
 

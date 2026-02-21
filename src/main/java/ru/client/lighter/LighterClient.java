@@ -287,7 +287,7 @@ public class LighterClient {
         return null;
     }
 
-    public String closePosition(String market, String currentSide) {
+    public LighterClosePositionResponse closePosition(String market, String currentSide) {
         String url = baseUrl + "/positions/close";
 
         Map<String, Object> body = new HashMap<>();
@@ -322,7 +322,7 @@ public class LighterClient {
             if ("success".equalsIgnoreCase(dto.getStatus()) ||
                     "submitted".equalsIgnoreCase(dto.getStatus())) {
                 log.info("[Lighter] Position closed: tx={}", dto.getTxHash());
-                return dto.getTxHash();
+                return dto;
             }
 
             log.error("[Lighter] Close failed: status={}", dto.getStatus());
@@ -335,16 +335,17 @@ public class LighterClient {
     }
 
     public OrderResult closePositionWithResult(String market, String currentSide) {
-        String txHash = closePosition(market, currentSide);
+        LighterClosePositionResponse dto = closePosition(market, currentSide);
 
-        if (txHash != null) {
+        if (dto.getStatus() != null) {
             return OrderResult.builder()
                     .exchange(ExchangeType.LIGHTER)
                     .symbol(market)
                     .success(true)
-                    .orderId(txHash)
+                    .orderId(dto.getTxHash())
                     .message("Position closed")
                     .timestamp(System.currentTimeMillis())
+                    .realizedPnl(Double.valueOf(dto.getTradePnl()))
                     .build();
         }
 

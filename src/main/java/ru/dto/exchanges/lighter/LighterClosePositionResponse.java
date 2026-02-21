@@ -7,15 +7,18 @@ import lombok.Data;
 @Data
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class LighterClosePositionResponse {
-    private String status;           // "success" / "submitted"
+    private String status;
     private String message;
     
     private String market;
     private String size;
-    private String side;             // Close side: SELL for LONG
+    private String side;
     
     @JsonProperty("tx_hash")
     private String txHash;
     
-    private String note;             // Optional guidance
+    private String note;
+
+    @JsonProperty("trade_pnl")
+    private String tradePnl;
 }

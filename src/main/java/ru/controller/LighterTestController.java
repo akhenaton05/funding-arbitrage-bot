@@ -259,7 +259,9 @@ public class LighterTestController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            String txHash = lighterClient.closePosition(market, currentSide);
+            LighterClosePositionResponse txHash = lighterClient.closePosition(market, currentSide);
+
+            log.info("Response from closing {}", txHash);
 
             if (txHash != null) {
                 response.put("status", "success");
@@ -362,7 +364,7 @@ public class LighterTestController {
 
             // Step 5: Close position
             log.info("[Test] Step 5: Closing position");
-            String closeTx = lighterClient.closePosition(market, "LONG");
+            LighterClosePositionResponse closeTx = lighterClient.closePosition(market, "LONG");
             steps.put("5_close", Map.of(
                     "status", closeTx != null ? "✅" : "❌",
                     "tx_hash", closeTx != null ? closeTx : "failed"

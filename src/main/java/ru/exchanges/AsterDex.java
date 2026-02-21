@@ -79,7 +79,7 @@ public class AsterDex implements Exchange {
 
         return Balance.builder()
                 .balance(balance)
-                .margin(balance * 0.08) //85% of balance for slippage and fees
+                .margin(balance * 0.85) //85% of balance for slippage and fees
                 .build();
     }
 

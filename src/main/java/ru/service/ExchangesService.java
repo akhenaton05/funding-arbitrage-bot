@@ -243,7 +243,7 @@ public class ExchangesService {
             }
         }
 
-        if (marginBalance <= 1) {
+        if (marginBalance <= 10) {
             String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
 

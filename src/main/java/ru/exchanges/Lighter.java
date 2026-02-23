@@ -190,4 +190,18 @@ public class Lighter implements Exchange {
     public boolean supportsSlTp() {
         return false;
     }
+
+    @Override
+    public PositionRiskControl validatePositionRisk(String symbol, Direction direction) {
+        //Lighter returns just liq price from positions, no mark price
+        List<Position> positions = getPositions(symbol, direction);
+        //Getting markPrice from orderbook
+        double markPrice = lighterClient.getMarkPrice(formatSymbol(symbol));
+        log.info("[Lighter] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), markPrice);
+
+        return PositionRiskControl.builder()
+                .liquidationPrice(positions.getFirst().getLiquidationPrice())
+                .markPrice(markPrice)
+                .build();
+    }
 }

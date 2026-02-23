@@ -13,4 +13,5 @@ public class Position {
     private double entryPrice;
     private double markPrice;
     private double unrealizedPnl;
+    private double liquidationPrice;
 }

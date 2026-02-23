@@ -30,6 +30,7 @@ public class LighterPositionMapper {
             double entryPrice = Double.parseDouble(lighterPos.getOpenPrice());
             double markPrice = Double.parseDouble(lighterPos.getMarkPrice());
             double unrealizedPnl = Double.parseDouble(lighterPos.getUnrealisedPnl());
+            double liquidationPrice = Double.parseDouble(lighterPos.getLiquidationPrice());
 
             Direction side = Direction.valueOf(lighterPos.getSide());
 
@@ -41,6 +42,7 @@ public class LighterPositionMapper {
                     .entryPrice(entryPrice)
                     .markPrice(markPrice)
                     .unrealizedPnl(unrealizedPnl)
+                    .liquidationPrice(liquidationPrice)
                     .build();
 
         } catch (Exception e) {

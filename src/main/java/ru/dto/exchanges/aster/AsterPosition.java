@@ -18,6 +18,8 @@ public class AsterPosition {
     private String unrealizedProfit;
     @JsonProperty("maxNotionalValue")
     private String maxNotionalValue;
+    @JsonProperty("liquidationPrice")
+    private String liquidationPrice;
 
     public double getMaxNotionalValue() {
         try {

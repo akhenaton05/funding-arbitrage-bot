@@ -27,6 +27,7 @@ public class AsterPositionMapper {
             double entryPrice = Double.parseDouble(asterPos.getEntryPrice());
             double markPrice = Double.parseDouble(asterPos.getMarkPrice());
             double unrealizedPnl = Double.parseDouble(asterPos.getUnrealizedProfit());
+            double liquidationPrice = Double.parseDouble(asterPos.getLiquidationPrice());
 
             Direction side = Direction.valueOf(asterPos.getPositionSide());
 
@@ -38,6 +39,7 @@ public class AsterPositionMapper {
                     .entryPrice(entryPrice)
                     .markPrice(markPrice)
                     .unrealizedPnl(unrealizedPnl)
+                    .liquidationPrice(liquidationPrice)
                     .build();
 
         } catch (Exception e) {

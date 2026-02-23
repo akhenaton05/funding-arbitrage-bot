@@ -1,6 +1,5 @@
 package ru.exchanges;
 
-import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -9,13 +8,11 @@ import ru.client.aster.AsterClient;
 import ru.dto.exchanges.*;
 import ru.dto.exchanges.aster.*;
 import ru.dto.funding.FundingCloseSignal;
-import ru.dto.funding.PositionPnLData;
 import ru.exceptions.ClosingPositionException;
 import ru.exceptions.OpeningPositionException;
 import ru.mapper.aster.AsterOrderBookMapper;
 import ru.mapper.aster.AsterPositionMapper;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -24,7 +21,7 @@ import java.util.stream.Collectors;
 @Service
 @EnableScheduling
 @RequiredArgsConstructor
-public class AsterDex implements Exchange {
+public class Asterdex implements Exchange {
 
     private final AsterClient asterClient;
     private final double makerFee = 0.00005;  // 0.005%
@@ -145,13 +142,14 @@ public class AsterDex implements Exchange {
             }
 
             OrderResult result = asterClient.closePosition(formatSymbol(symbol));
-            log.info("[AsterDex] Order closed with result: {}", result);
+            log.info("[Asterdex] Order closed with result: {}", result);
 
             //PnL Calculation(Funding fees not included)
             AsterTrade tradeResult = asterClient.getTradeResultByOrderId(formatSymbol(symbol), Long.valueOf(result.getOrderId()));
-            log.info("[AsterDex] Trade result for {}: {}", result.getOrderId(), tradeResult);
+            log.info("[Asterdex] Trade result for {}: {}", result.getOrderId(), tradeResult);
+            double totalFee = (Double.parseDouble(tradeResult.getCommission()) * 2.0);
 
-            result.setRealizedPnl(Double.valueOf(tradeResult.getRealizedPnl()));
+            result.setRealizedPnl(Double.parseDouble(tradeResult.getRealizedPnl()) - totalFee);
 
             return result;
 
@@ -165,10 +163,10 @@ public class AsterDex implements Exchange {
     }
 
     @Override
-    public String setLeverage(String symbol, int leverage){
+    public String setLeverage(String symbol, int leverage) {
         if (asterClient.setLeverage(formatSymbol(symbol), leverage)) {
-            return "[AsterDex] Leverage " + leverage +" was set for $" + symbol;
-        } else throw new OpeningPositionException("[AsterDex] Error setting leverage");
+            return "[Asterdex] Leverage " + leverage + " was set for $" + symbol;
+        } else throw new OpeningPositionException("[Asterdex] Error setting leverage");
     }
 
     @Override
@@ -183,7 +181,7 @@ public class AsterDex implements Exchange {
             current--;
         }
 
-        throw new OpeningPositionException("[AsterDex] No allowed leverage for " + symbol);
+        throw new OpeningPositionException("[Asterdex] No allowed leverage for " + symbol);
     }
 
     @Override
@@ -332,5 +330,17 @@ public class AsterDex implements Exchange {
     @Override
     public boolean supportsSlTp() {
         return true;
+    }
+
+    @Override
+    public PositionRiskControl validatePositionRisk(String ticker, Direction direction) {
+        //Aster returns data from position request
+        List<Position> positions = getPositions(ticker, direction);
+        log.info("[Aster] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), positions.getFirst().getMarkPrice());
+
+        return PositionRiskControl.builder()
+                .liquidationPrice(positions.getFirst().getLiquidationPrice())
+                .markPrice(positions.getFirst().getMarkPrice())
+                .build();
     }
 }

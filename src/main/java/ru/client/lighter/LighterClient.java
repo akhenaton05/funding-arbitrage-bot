@@ -702,4 +702,31 @@ public class LighterClient {
             return null;
         }
     }
+
+    public Double getMarkPrice(String market) {
+        LighterBestPricesResponse best = getBestPrices(market);
+        if (best != null && best.getMidPrice() != null) {
+            try {
+                double mid = best.getMidPrice();
+                log.info("[Lighter] Mark(mid) price for {} from best-prices: {}", market, mid);
+                return mid;
+            } catch (NumberFormatException e) {
+                log.warn("[Lighter] Failed to parse midPrice from best-prices for {}: {}", market, e.getMessage());
+            }
+        }
+
+        LighterOrderBookResponse ob = getOrderBook(market, 10);
+        if (ob != null && ob.getSummary() != null && ob.getSummary().getMidPrice() != null) {
+            try {
+                double mid = ob.getSummary().getMidPrice();
+                log.info("[Lighter] Mark(mid) price for {} from orderbook: {}", market, mid);
+                return mid;
+            } catch (NumberFormatException e) {
+                log.warn("[Lighter] Failed to parse midPrice from orderbook for {}: {}", market, e.getMessage());
+            }
+        }
+
+        log.warn("[Lighter] Mark price unavailable for {}", market);
+        return 0.0;
+    }
 }

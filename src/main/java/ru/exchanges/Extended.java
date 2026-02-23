@@ -1,6 +1,5 @@
 package ru.exchanges;
 
-import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -282,5 +281,18 @@ public class Extended implements Exchange {
                     ticker, direction, e.getMessage(), e);
             return 0.0;
         }
+    }
+
+
+    @Override
+    public PositionRiskControl validatePositionRisk(String symbol, Direction direction) {
+        //Extended returns data from position request
+        List<Position> positions = getPositions(symbol, direction);
+        log.info("[Extended] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), positions.getFirst().getMarkPrice());
+
+        return PositionRiskControl.builder()
+                .liquidationPrice(positions.getFirst().getLiquidationPrice())
+                .markPrice(positions.getFirst().getMarkPrice())
+                .build();
     }
 }

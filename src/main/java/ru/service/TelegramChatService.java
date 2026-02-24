@@ -174,7 +174,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         result.forEach((exchange, balance) -> {
             if (exchange.equals("TOTAL")) return;
-            sb.append(String.format("🏦 *%s:* `$%.2f`\n", exchange, balance));
+            sb.append(String.format("\uD83D\uDDFF *%s:* `$%.2f`\n", exchange, balance));
         });
 
         sb.append("\n─────────────────\n");

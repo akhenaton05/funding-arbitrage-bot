@@ -1399,7 +1399,7 @@ public class ExchangesService {
         for (Exchange exchange : exchangeFactory.getAllExchanges()) {
             try {
                 double balance = exchange.getBalance().getBalance();
-                balances.put(exchange.getType().name(), balance);
+                balances.put(exchange.getName(), balance);
                 total += balance;
             } catch (Exception e) {
                 log.error("[FundingBot] Error getting balance for {}: {}",

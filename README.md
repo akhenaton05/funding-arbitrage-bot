@@ -41,7 +41,7 @@ StarkNet Ed25519         zkLighter SDK
 Extended Exchange        Lighter Exchange
 ```
 
-The Java bot is the single source of truth: it holds all business logic, position state, PnL tracking, and scheduling. The Python services act as thin proxies — they handle SDK initialization, chain signing, and expose a simple REST API for the bot to call.
+The Java holds all core logic: business logic, position state, PnL tracking, and scheduling. The Python services act as thin proxies — they handle SDK initialization, chain signing, and expose a simple REST API for the bot to call.
 
 ---
 
@@ -196,5 +196,4 @@ java -jar target/CryptoTgBot-1.0-SNAPSHOT.jar
 ---
 
 ## ⚠️ Disclaimer
-
 Trading perpetual futures involves significant financial risk, including the possibility of total loss of capital. This software is provided for educational and research purposes. Always test on paper accounts before deploying real funds. The author accepts no responsibility for financial losses.

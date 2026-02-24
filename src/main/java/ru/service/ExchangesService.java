@@ -9,6 +9,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import ru.config.FundingConfig;
+import ru.dto.db.model.Trade;
 import ru.dto.exchanges.*;
 import ru.dto.funding.*;
 import ru.event.NewArbitrageEvent;
@@ -18,8 +19,11 @@ import ru.exceptions.ClosingPositionException;
 import ru.exceptions.OpeningPositionException;
 import ru.exchanges.Exchange;
 import ru.exchanges.factory.ExchangeFactory;
+import ru.repository.TradeRepository;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -37,6 +41,7 @@ public class ExchangesService {
     private final ApplicationEventPublisher eventPublisher;
     private final FundingArbitrageService fundingArbitrageService;
     private final FundingConfig fundingConfig;
+    private final TradeRepository tradeRepository;
 
     private final Map<String, FundingCloseSignal> openedPositions = new ConcurrentHashMap<>();
     private final Map<String, PositionBalance> balanceMap = new ConcurrentHashMap<>();
@@ -621,7 +626,6 @@ public class ExchangesService {
             try {
                 CompletableFuture.allOf(firstFuture, secondFuture).get(30, TimeUnit.SECONDS);
 
-                // null-safe получение PnL из API
                 double finalPnL = 0.0;
                 try {
                     OrderResult r1 = firstFuture.get();
@@ -690,6 +694,9 @@ public class ExchangesService {
                         currentSpread,
                         signal.getClosureReason()
                 ));
+
+                //Saving result to database
+                saveResultToDb(signal, finalPnL);
 
                 notifiedPositions.remove(signal.getId());
 
@@ -953,7 +960,7 @@ public class ExchangesService {
                 signal.getTicker(),
                 signal.getFirstPosition().getDirection()
         );
-        boolean firstClosed = Objects.isNull(firstPositions) || firstPositions.isEmpty();
+        boolean firstClosed = isPositionClosed(firstPositions);
 
         if (firstClosed) {
             log.info("[FundingBot] {} position confirmed closed", ex1.getName());
@@ -966,7 +973,8 @@ public class ExchangesService {
                 signal.getTicker(),
                 signal.getSecondPosition().getDirection()
         );
-        boolean secondClosed = Objects.isNull(secondPositions) || secondPositions.isEmpty();
+
+        boolean secondClosed = isPositionClosed(secondPositions);
 
         if (secondClosed) {
             log.info("[FundingBot] {} position confirmed closed", ex2.getName());
@@ -1102,101 +1110,6 @@ public class ExchangesService {
                     signal.getSecondExchange().getName(), signal.getTicker(), e.getMessage());
         }
     }
-
-
-//    private void validatePositionRisk(FundingCloseSignal signal) {
-//        try {
-//            PositionRiskControl firstRisk = signal.getFirstExchange().validatePositionRisk(signal.getTicker(), signal.getFirstPosition().getDirection());
-//            PositionRiskControl secondRisk =  signal.getSecondExchange().validatePositionRisk(signal.getTicker(), signal.getSecondPosition().getDirection());
-//
-//            PositionPnLData pnlData = positionDataMap.get(signal.getId());
-//
-//            double warnThr = fundingConfig.getLiq().getWarn();
-//            double critThr = fundingConfig.getLiq().getCritical();
-//
-//            if (firstRisk != null
-//                    && firstRisk.getLiquidationPrice() > 0
-//                    && firstRisk.getMarkPrice() > 0) {
-//
-//                double liq = firstRisk.getLiquidationPrice();
-//                double mark = firstRisk.getMarkPrice();
-//                double distancePct = Math.abs(mark - liq) / liq * 100.0;
-//
-//                log.info("[FundingBot] [FIRST] {} liq risk: mark={}, liq={}, distance={}%",
-//                        signal.getTicker(),
-//                        String.format("%.6f", mark),
-//                        String.format("%.6f", liq),
-//                        String.format("%.2f", distancePct));
-//
-//                if (distancePct <= warnThr) {
-//                    String level = distancePct <= critThr ? "CRITICAL" : "WARNING";
-//                    String msg = String.format(
-//                            "%s: Liquidation risk on FIRST (%s): %.2f%% to liq (mark=%.6f, liq=%.6f)",
-//                            level, signal.getTicker(), distancePct, mark, liq
-//                    );
-//
-//                    eventPublisher.publishEvent(PositionUpdateEvent.builder()
-//                            .message(msg)
-//                            .pnlData(pnlData)
-//                            .positionId(signal.getId())
-//                            .mode(signal.getMode().toString())
-//                            .ticker(signal.getTicker())
-//                            .build()
-//                    );
-//
-//                    log.warn("[FundingBot] {}", msg);
-//                }
-//            }
-//
-//            if (secondRisk != null
-//                    && secondRisk.getLiquidationPrice() > 0
-//                    && secondRisk.getMarkPrice() > 0) {
-//
-//                double liq = secondRisk.getLiquidationPrice();
-//                double mark = secondRisk.getMarkPrice();
-//                double distancePct = Math.abs(mark - liq) / liq * 100.0;
-//
-//                log.info("[FundingBot] [SECOND] {} liq risk: mark={}, liq={}, distance={}%",
-//                        signal.getTicker(),
-//                        String.format("%.6f", mark),
-//                        String.format("%.6f", liq),
-//                        String.format("%.2f", distancePct));
-//
-//                if (distancePct <= warnThr) {
-//                    String level = distancePct <= critThr ? "CRITICAL" : "WARNING";
-//                    String msg = String.format(
-//                            "%s: Liquidation risk on SECOND (%s): %.2f%% to liq (mark=%.6f, liq=%.6f)",
-//                            level, signal.getTicker(), distancePct, mark, liq
-//                    );
-//
-//                    eventPublisher.publishEvent(PositionUpdateEvent.builder()
-//                            .message(msg)
-//                            .pnlData(pnlData)
-//                            .positionId(signal.getId())
-//                            .mode(signal.getMode().toString())
-//                            .ticker(signal.getTicker())
-//                            .build()
-//                    );
-//
-//                    log.warn("[FundingBot] {}", msg);
-//                }
-//            }
-//
-//        } catch (Exception e) {
-//            String message = "Error getting position risk data";
-//            log.error("[FundingBot] Error getting position risk data");
-//            PositionPnLData pnLData = positionDataMap.get(signal.getId());
-//
-//            eventPublisher.publishEvent(PositionUpdateEvent.builder()
-//                    .message(message)
-//                    .pnlData(pnLData)
-//                    .positionId(signal.getId())
-//                    .mode(signal.getMode().toString())
-//                    .ticker(signal.getTicker())
-//                    .build()
-//            );
-//        }
-//    }
 
     /**
      * Calculations
@@ -1804,5 +1717,32 @@ public class ExchangesService {
                     String.format("%.2f", profitPercent),
                     String.format("%.2f", thresholdPercent));
         }
+    }
+
+    private void saveResultToDb(FundingCloseSignal signal, double pnl) {
+        Trade trade =  Trade.builder()
+                .positionId(signal.getId())
+                .exchange(signal.getFirstExchange().getName() + "/" + signal.getSecondExchange().getName())
+                .pnl(pnl)
+                .openedAt(Instant.ofEpochMilli(signal.getOpenedAtMs())
+                        .atZone(ZoneId.systemDefault())
+                        .toLocalDateTime())
+                .closedAt(LocalDateTime.now())
+                .build();
+
+        try {
+            tradeRepository.save(trade);
+            log.info("[FundingBot] Trade saved to DB: {}", trade);
+        } catch (Exception e) {
+            log.error("[FundingBot] Failed to save trade to DB: positionId={}, pnl={}, error={}",
+                    signal.getId(), pnl, e.getMessage());
+        }
+    }
+
+    private boolean isPositionClosed(List<Position> positions) {
+        if (positions == null || positions.isEmpty()) return true;
+        Position pos = positions.getFirst();
+        if (pos == null) return true;
+        return pos.getSize() == 0.0;
     }
 }

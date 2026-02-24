@@ -1,6 +1,7 @@
 package ru.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.ValidationException;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
@@ -20,7 +21,6 @@ import ru.event.FundingAlertEvent;
 import ru.event.NewArbitrageEvent;
 import ru.utils.FundingArbitrageContext;
 
-import javax.xml.bind.ValidationException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 

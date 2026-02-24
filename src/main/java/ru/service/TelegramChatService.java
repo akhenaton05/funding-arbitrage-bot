@@ -28,6 +28,7 @@ import ru.utils.FundingArbitrageContext;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -84,11 +85,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
             case "/close" -> closePositionById(chatId, parts);
             case "/closeall" -> closeAllPositions();
             case "/pnl" -> calculatePositionPnl(chatId, parts);
+            case "/balance" -> getExchangesBalance(chatId);
         }
     }
 
     private void sendRates(Long chatId) {
-        log.info("Request to get funding rates received");
+        log.info("[Telegram] Request to get funding rates received");
         sendTypingAction(chatId);
 
         try {
@@ -163,8 +165,26 @@ public class TelegramChatService extends TelegramLongPollingBot {
         sendMessage(chatId, validateCurrentPnl(posData));
     }
 
+    private void getExchangesBalance(Long chatId) {
+        log.info("[Telegram] Request to get exchanges balances");
+        Map<String, Double> result = exchangesService.getExchangesBalance();
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("🤖 *FundingBot:* Exchange Balances 💰\n\n");
+
+        result.forEach((exchange, balance) -> {
+            if (exchange.equals("TOTAL")) return;
+            sb.append(String.format("🏦 *%s:* `$%.2f`\n", exchange, balance));
+        });
+
+        sb.append("\n─────────────────\n");
+        sb.append(String.format("💵 *Total: * `$%.2f`", result.getOrDefault("TOTAL", 0.0)));
+
+        sendMessage(chatId, sb.toString());
+    }
+
     private void closeAllPositions() {
-        log.info("Request to close all positions");
+        log.info("[Telegram] Request to close all positions");
         exchangesService.closeAllPositions();
     }
 
@@ -210,9 +230,9 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         try {
             execute(message);
-            log.info("Sent message to Telegram chat {}: {}", chatId, text);
+            log.info("[Telegram] Sent message to Telegram chat {}: {}", chatId, text);
         } catch (TelegramApiException e) {
-            log.error("Failed to send message to Telegram chat {}: {}", chatId, e.getMessage());
+            log.error("[Telegram] Failed to send message to Telegram chat {}: {}", chatId, e.getMessage());
         }
     }
 
@@ -223,14 +243,14 @@ public class TelegramChatService extends TelegramLongPollingBot {
             chatAction.setAction(ActionType.TYPING);
             execute(chatAction);
         } catch (Exception e) {
-            log.debug("Could not send typing action", e);
+            log.debug("[Telegram] Could not send typing action", e);
         }
     }
 
     @EventListener
     @Async
     public void handleFundingAlert(FundingAlertEvent event) {
-        log.info("Received funding alert event for chat {}", event.getChatId());
+        log.info("[Telegram] Received funding alert event for chat {}", event.getChatId());
         sendMessage(event.getChatId(), formatAlert(event.getMessage()));
     }
 
@@ -274,7 +294,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     @EventListener
     @Async
-    public void handlePnLThreshold(PositionUpdateEvent event) {
+    public void handlePositionUpdate(PositionUpdateEvent event) {
         log.info("[Telegram] Position event for {}", event.getPositionId());
 
         String message = formatPositionEvent(event);
@@ -309,7 +329,18 @@ public class TelegramChatService extends TelegramLongPollingBot {
         int wins = 0;
         int losses = 0;
 
-        for (Map.Entry<String, PositionBalance> entry : balanceMap.entrySet()) {
+        //Sorting by position id
+        List<Map.Entry<String, PositionBalance>> sortedEntries = balanceMap.entrySet().stream()
+                .sorted(Comparator.comparingInt(e -> {
+                    try {
+                        return Integer.parseInt(e.getKey().replaceAll("\\D+", ""));
+                    } catch (NumberFormatException ex) {
+                        return Integer.MAX_VALUE;
+                    }
+                }))
+                .toList();
+
+        for (Map.Entry<String, PositionBalance> entry : sortedEntries) {
             String positionId = entry.getKey();
             PositionBalance balance = entry.getValue();
 

@@ -62,7 +62,7 @@ KNOWN_MAX_LEVERAGE: dict[str, int] = {
     "MEGA": 5, "PEPE": 5, "BONK": 5, "SHIB": 5,
     "PIPPIN": 3, "DEGEN": 3, "FLOKI": 3, "RIVER": 3,
     "ARC": 3, "ZORA": 3, "STABLE": 3, "MYX": 3,
-    "VVV": 3, "USELESS": 3, "AERO": 3,
+    "VVV": 3, "USELESS": 3, "AERO": 3, "SKR": 3,
     "USDCHF": 10, "EURUSD": 10, "GBPUSD": 10,
     "USDJPY": 10, "GBPJPY": 10, "AUDUSD": 10,
     "XAU": 10, "XAG": 10,

@@ -1,23 +1,18 @@
 package ru.exchanges;
 
-import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.stereotype.Service;
 import ru.client.aster.AsterClient;
 import ru.dto.exchanges.*;
-import ru.dto.exchanges.aster.AsterBookTicker;
-import ru.dto.exchanges.aster.AsterPosition;
-import ru.dto.exchanges.aster.OrderResponse;
-import ru.dto.exchanges.aster.PremiumIndexResponse;
+import ru.dto.exchanges.aster.*;
 import ru.dto.funding.FundingCloseSignal;
-import ru.dto.funding.PositionPnLData;
 import ru.exceptions.ClosingPositionException;
+import ru.exceptions.OpeningPositionException;
 import ru.mapper.aster.AsterOrderBookMapper;
 import ru.mapper.aster.AsterPositionMapper;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -26,7 +21,7 @@ import java.util.stream.Collectors;
 @Service
 @EnableScheduling
 @RequiredArgsConstructor
-public class AsterDex implements Exchange {
+public class Asterdex implements Exchange {
 
     private final AsterClient asterClient;
     private final double makerFee = 0.00005;  // 0.005%
@@ -134,12 +129,6 @@ public class AsterDex implements Exchange {
         }
     }
 
-
-    @Override
-    public boolean hasPosition(String symbol, Direction side) {
-        return false;
-    }
-
     @Override
     public OrderResult closePosition(String symbol, Direction currentSide) {
         try {
@@ -152,7 +141,17 @@ public class AsterDex implements Exchange {
                 }
             }
 
-            return asterClient.closePosition(formatSymbol(symbol));
+            OrderResult result = asterClient.closePosition(formatSymbol(symbol));
+            log.info("[Asterdex] Order closed with result: {}", result);
+
+            //PnL Calculation(Funding fees not included)
+            AsterTrade tradeResult = asterClient.getTradeResultByOrderId(formatSymbol(symbol), Long.valueOf(result.getOrderId()));
+            log.info("[Asterdex] Trade result for {}: {}", result.getOrderId(), tradeResult);
+            double totalFee = (Double.parseDouble(tradeResult.getCommission()) * 2.0);
+
+            result.setRealizedPnl(Double.parseDouble(tradeResult.getRealizedPnl()) - totalFee);
+
+            return result;
 
         } catch (InterruptedException e) {
             log.error("[Aster] Interrupted during close delay", e);
@@ -164,13 +163,25 @@ public class AsterDex implements Exchange {
     }
 
     @Override
-    public String setLeverage(String symbol, int leverage){
-        return asterClient.setLeverage(formatSymbol(symbol), leverage);
+    public String setLeverage(String symbol, int leverage) {
+        if (asterClient.setLeverage(formatSymbol(symbol), leverage)) {
+            return "[Asterdex] Leverage " + leverage + " was set for $" + symbol;
+        } else throw new OpeningPositionException("[Asterdex] Error setting leverage");
     }
 
     @Override
-    public int getMaxLeverage(String symbol) {
-        return asterClient.getMaxLeverage(formatSymbol(symbol));
+    public int getMaxLeverage(String symbol, int leverage) {
+        int max = asterClient.getMaxLeverage(formatSymbol(symbol));
+        int current = Math.min(leverage, max);
+
+        while (current >= 1) {
+            if (asterClient.setLeverage(formatSymbol(symbol), current)) {
+                return current;
+            }
+            current--;
+        }
+
+        throw new OpeningPositionException("[Asterdex] No allowed leverage for " + symbol);
     }
 
     @Override
@@ -290,7 +301,6 @@ public class AsterDex implements Exchange {
     public String placeStopLoss(String symbol, Direction direction, double stopPrice) {
         String formattedSymbol = formatSymbol(symbol);
 
-        // Определяем side для SL (противоположный позиции)
         String slSide = direction == Direction.LONG ? "SELL" : "BUY";
         String positionSide = direction.toString(); // "LONG" or "SHORT"
 
@@ -306,7 +316,6 @@ public class AsterDex implements Exchange {
     public String placeTakeProfit(String symbol, Direction direction, double tpPrice) {
         String formattedSymbol = formatSymbol(symbol);
 
-        // Определяем side для TP (противоположный позиции)
         String tpSide = direction == Direction.LONG ? "SELL" : "BUY";
         String positionSide = direction.toString(); // "LONG" or "SHORT"
 
@@ -319,12 +328,19 @@ public class AsterDex implements Exchange {
     }
 
     @Override
-    public void cancelAllOrders(String symbol) {
-        asterClient.cancelAllOrders(formatSymbol(symbol));
+    public boolean supportsSlTp() {
+        return true;
     }
 
     @Override
-    public boolean supportsSlTp() {
-        return true;
+    public PositionRiskControl validatePositionRisk(String ticker, Direction direction) {
+        //Aster returns data from position request
+        List<Position> positions = getPositions(ticker, direction);
+        log.info("[Aster] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), positions.getFirst().getMarkPrice());
+
+        return PositionRiskControl.builder()
+                .liquidationPrice(positions.getFirst().getLiquidationPrice())
+                .markPrice(positions.getFirst().getMarkPrice())
+                .build();
     }
 }

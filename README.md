@@ -197,5 +197,3 @@ java -jar target/CryptoTgBot-1.0-SNAPSHOT.jar
 
 ## ⚠️ Disclaimer
 Trading perpetual futures involves significant financial risk, including the possibility of total loss of capital. This software is provided for educational and research purposes. Always test on paper accounts before deploying real funds. The author accepts no responsibility for financial losses.
-
-Trading perpetual futures involves significant financial risk, including the possibility of total loss of capital. This software is provided for educational and research purposes. Always test on paper accounts before deploying real funds. The author accepts no responsibility for financial losses.

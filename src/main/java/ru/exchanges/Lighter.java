@@ -56,16 +56,16 @@ public class Lighter implements Exchange {
                 .build();
     }
 
-@Override
-public OrderBook getOrderBook(String symbol) {
-    try {
-        LighterOrderBookResponse orderBook = lighterClient.getOrderBook(formatSymbol(symbol));
-        return LighterOrderBookMapper.toOrderBook(orderBook, symbol);
-    } catch (Exception e) {
-        log.error("[Lighter] Error getting Orderbook for {}", symbol, e);
-        return null;
+    @Override
+    public OrderBook getOrderBook(String symbol) {
+        try {
+            LighterOrderBookResponse orderBook = lighterClient.getOrderBook(formatSymbol(symbol));
+            return LighterOrderBookMapper.toOrderBook(orderBook, symbol);
+        } catch (Exception e) {
+            log.error("[Lighter] Error getting Orderbook for {}", symbol, e);
+            return null;
+        }
     }
-}
 
     @Override
     public List<Position> getPositions(String symbol, Direction side) {
@@ -78,12 +78,8 @@ public OrderBook getOrderBook(String symbol) {
     }
 
     @Override
-    public boolean hasPosition(String symbol, Direction side) {
-        return false;
-    }
-
-    @Override
     public OrderResult closePosition(String symbol, Direction currentSide) {
+        //Lighter calculates PnL right before closing the position
         return lighterClient.closePositionWithResult(formatSymbol(symbol), currentSide.toString());
     }
 
@@ -93,7 +89,7 @@ public OrderBook getOrderBook(String symbol) {
     }
 
     @Override
-    public int getMaxLeverage(String symbol) {
+    public int getMaxLeverage(String symbol, int leverage) {
         return lighterClient.getMaxLeverage(formatSymbol(symbol));
     }
 
@@ -158,6 +154,24 @@ public OrderBook getOrderBook(String symbol) {
     }
 
     @Override
+    public int getOpenDelay(ExchangeType pairedWith) {
+        return switch (pairedWith) {
+            case ASTER -> 0;  // Wait 0s for Aster to close
+            case EXTENDED -> 0;   // Wait 0s for Extended to close
+            default -> 0;
+        };
+    }
+
+    @Override
+    public int getCloseDelay(ExchangeType pairedWith) {
+        return switch (pairedWith) {
+            case ASTER -> 0;  // Wait 0s for Aster to close
+            case EXTENDED -> 0;   // Wait 0s for Extended to close
+            default -> 0;
+        };
+    }
+
+    @Override
     public void setPairedExchange(ExchangeType pairedWith) {
         currentPairedExchange = pairedWith;
     }
@@ -173,11 +187,21 @@ public OrderBook getOrderBook(String symbol) {
     }
 
     @Override
-    public void cancelAllOrders(String symbol) {
+    public boolean supportsSlTp() {
+        return false;
     }
 
     @Override
-    public boolean supportsSlTp() {
-        return false;
+    public PositionRiskControl validatePositionRisk(String symbol, Direction direction) {
+        //Lighter returns just liq price from positions, no mark price
+        List<Position> positions = getPositions(symbol, direction);
+        //Getting markPrice from orderbook
+        double markPrice = lighterClient.getMarkPrice(formatSymbol(symbol));
+        log.info("[Lighter] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), markPrice);
+
+        return PositionRiskControl.builder()
+                .liquidationPrice(positions.getFirst().getLiquidationPrice())
+                .markPrice(markPrice)
+                .build();
     }
 }

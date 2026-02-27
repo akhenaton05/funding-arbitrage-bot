@@ -22,11 +22,13 @@ import ru.dto.funding.HoldingMode;
 import ru.dto.funding.PositionPnLData;
 import ru.event.FundingAlertEvent;
 import ru.event.PnLThresholdEvent;
+import ru.event.PositionUpdateEvent;
 import ru.utils.FundingArbitrageContext;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -82,12 +84,13 @@ public class TelegramChatService extends TelegramLongPollingBot {
             case "/trades" -> getTrades(chatId);
             case "/close" -> closePositionById(chatId, parts);
             case "/closeall" -> closeAllPositions();
-            case "/pospnl" -> calculatePositionPnl(chatId, parts);
+            case "/pnl" -> calculatePositionPnl(chatId, parts);
+            case "/balance" -> getExchangesBalance(chatId);
         }
     }
 
     private void sendRates(Long chatId) {
-        log.info("Request to get funding rates received");
+        log.info("[Telegram] Request to get funding rates received");
         sendTypingAction(chatId);
 
         try {
@@ -135,9 +138,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
         //Checking parameter
         if (parts.length < 2 || parts[1].trim().isEmpty()) {
             sendMessage(chatId,
-                    "🤖 *FundingBot:* Invalid position ID format\n\n" +
-                            "*Format:* `P-XXXX` (e.g. `P-0001`)\n\n" +
-                            "Use /trades to see active positions");
+                    """
+                            🤖 *FundingBot:* Invalid position ID format
+                            
+                            *Format:* `P-XXXX` (e.g. `P-0001`)
+                            
+                            Use /trades to see active positions""");
             return;
         }
 
@@ -146,9 +152,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
         //Checking the format ID (P-0001, P-0002...)
         if (!positionId.matches("P-\\d{4}")) {
             sendMessage(chatId,
-                    "🤖 *FundingBot:* Invalid position ID format\n\n" +
-                            "*Format:* `P-XXXX` (e.g. `P-0001`)\n\n" +
-                            "Use /trades to see active positions");
+                    """
+                            🤖 *FundingBot:* Invalid position ID format
+                            
+                            *Format:* `P-XXXX` (e.g. `P-0001`)
+                            
+                            Use /trades to see active positions""");
             return;
         }
         PositionPnLData posData = exchangesService.pnlPositionCalculator(positionId);
@@ -156,8 +165,26 @@ public class TelegramChatService extends TelegramLongPollingBot {
         sendMessage(chatId, validateCurrentPnl(posData));
     }
 
+    private void getExchangesBalance(Long chatId) {
+        log.info("[Telegram] Request to get exchanges balances");
+        Map<String, Double> result = exchangesService.getExchangesBalance();
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("🤖 *FundingBot:* Exchange Balances 💰\n\n");
+
+        result.forEach((exchange, balance) -> {
+            if (exchange.equals("TOTAL")) return;
+            sb.append(String.format("🏦 *%s:* `$%.2f`\n", exchange, balance));
+        });
+
+        sb.append("\n─────────────────\n");
+        sb.append(String.format("💵 *Total: * `$%.2f`", result.getOrDefault("TOTAL", 0.0)));
+
+        sendMessage(chatId, sb.toString());
+    }
+
     private void closeAllPositions() {
-        log.info("Request to close all positions");
+        log.info("[Telegram] Request to close all positions");
         exchangesService.closeAllPositions();
     }
 
@@ -167,9 +194,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
         //Checking parameter
         if (parts.length < 2 || parts[1].trim().isEmpty()) {
             sendMessage(chatId,
-                    "🤖 *FundingBot:* *Usage:* `/close <position_id>`\n\n" +
-                            "*Example:* `/close P-0001`\n\n" +
-                            "Use /trades to see active positions");
+                    """
+                            🤖 *FundingBot:* *Usage:* `/close <position_id>`
+                            
+                            *Example:* `/close P-0001`
+                            
+                            Use /trades to see active positions""");
             return;
         }
 
@@ -178,9 +208,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
         //Checking the format ID (P-0001, P-0002...)
         if (!positionId.matches("P-\\d{4}")) {
             sendMessage(chatId,
-                    "🤖 *FundingBot:* Invalid position ID format\n\n" +
-                            "*Format:* `P-XXXX` (e.g. `P-0001`)\n\n" +
-                            "Use /trades to see active positions");
+                    """
+                            🤖 *FundingBot:* Invalid position ID format
+                            
+                            *Format:* `P-XXXX` (e.g. `P-0001`)
+                            
+                            Use /trades to see active positions""");
             return;
         }
 
@@ -197,9 +230,9 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         try {
             execute(message);
-            log.info("Sent message to Telegram chat {}: {}", chatId, text);
+            log.info("[Telegram] Sent message to Telegram chat {}: {}", chatId, text);
         } catch (TelegramApiException e) {
-            log.error("Failed to send message to Telegram chat {}: {}", chatId, e.getMessage());
+            log.error("[Telegram] Failed to send message to Telegram chat {}: {}", chatId, e.getMessage());
         }
     }
 
@@ -210,14 +243,14 @@ public class TelegramChatService extends TelegramLongPollingBot {
             chatAction.setAction(ActionType.TYPING);
             execute(chatAction);
         } catch (Exception e) {
-            log.debug("Could not send typing action", e);
+            log.debug("[Telegram] Could not send typing action", e);
         }
     }
 
     @EventListener
     @Async
     public void handleFundingAlert(FundingAlertEvent event) {
-        log.info("Received funding alert event for chat {}", event.getChatId());
+        log.info("[Telegram] Received funding alert event for chat {}", event.getChatId());
         sendMessage(event.getChatId(), formatAlert(event.getMessage()));
     }
 
@@ -259,6 +292,18 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
     }
 
+    @EventListener
+    @Async
+    public void handlePositionUpdate(PositionUpdateEvent event) {
+        log.info("[Telegram] Position event for {}", event.getPositionId());
+
+        String message = formatPositionEvent(event);
+
+        for (Long chatId : fundingContext.getSubscriberIds()) {
+            sendMessage(chatId, message);
+        }
+    }
+
     private void getTrades(Long chatId) {
         log.info("[Telegram] Got trades history request");
 
@@ -284,7 +329,18 @@ public class TelegramChatService extends TelegramLongPollingBot {
         int wins = 0;
         int losses = 0;
 
-        for (Map.Entry<String, PositionBalance> entry : balanceMap.entrySet()) {
+        //Sorting by position id
+        List<Map.Entry<String, PositionBalance>> sortedEntries = balanceMap.entrySet().stream()
+                .sorted(Comparator.comparingInt(e -> {
+                    try {
+                        return Integer.parseInt(e.getKey().replaceAll("\\D+", ""));
+                    } catch (NumberFormatException ex) {
+                        return Integer.MAX_VALUE;
+                    }
+                }))
+                .toList();
+
+        for (Map.Entry<String, PositionBalance> entry : sortedEntries) {
             String positionId = entry.getKey();
             PositionBalance balance = entry.getValue();
 
@@ -319,7 +375,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
             }
         }
 
-        // Summary
+        //Summary
         if (wins + losses > 0) {
             String summaryEmoji = totalPnL >= 0 ? "🟢" : "🔴";
             String sign = totalPnL >= 0 ? "+" : "";
@@ -403,7 +459,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*Ticker:* %s\n" +
                         "*Funding Rate:* %.2f%%\n" +
                         "*Reason:* %s\n" +
-                        "*P&L:* " + sign + "%.2f USD (%.2f%%)\n",
+                        "*P&L:* " + sign + "%.2f USD (%.2f%%)\n" +
+                        "*API PnL:* " + sign + "%.2f USD (%.2f%%)\n",
                 pnlEmoji,
                 event.getPositionId(),
                 event.getMode(),
@@ -411,6 +468,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
                 event.getRate(),
                 event.getClosureReason(),
                 event.getPnl(),
+                event.getPercent(),
+                event.getApiPnl(),
                 event.getPercent()
         );
     }
@@ -456,7 +515,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         sb.append("*Gross P&L:* ").append(formatMoney(pnlData.getGrossPnl())).append("\n");
         sb.append("*Funding:* ").append(formatMoney(pnlData.getTotalFundingNet())).append("\n");
-        sb.append("*Fees:* -").append(String.format("%.4f USD", pnlData.getTotalOpenFees() + pnlData.getTotalCloseFees())).append("\n\n");
 
         double netPnl = pnlData.getNetPnl();
         String sign = netPnl >= 0 ? "+" : "";
@@ -481,6 +539,22 @@ public class TelegramChatService extends TelegramLongPollingBot {
                 event.getPositionId(),
                 event.getTicker(),
                 event.getThresholdPercent(),
+                pnl.getNetPnl()
+        );
+    }
+
+    private String formatPositionEvent(PositionUpdateEvent event) {
+        PositionPnLData pnl = event.getPnlData();
+
+        return String.format(
+                "🤖 *FundingBot:* Position Update \uD83D\uDCCC\n\n" +
+                        "*ID:* `%s`\n" +
+                        "*Ticker:* %s\n" +
+                        "*Message:* %s\n" +
+                        "*P&L:* $%.2f\n",
+                event.getPositionId(),
+                event.getTicker(),
+                event.getMessage(),
                 pnl.getNetPnl()
         );
     }

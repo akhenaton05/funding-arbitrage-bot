@@ -13,4 +13,5 @@ public class OrderResult {
     private String message;
     private String errorCode;
     private Long timestamp;
+    private Double realizedPnl;
 }

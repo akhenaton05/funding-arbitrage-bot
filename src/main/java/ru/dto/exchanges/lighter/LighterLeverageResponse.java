@@ -7,17 +7,17 @@ import lombok.Data;
 @Data
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class LighterLeverageResponse {
-    private String status;              // "success"
+    private String status;
     private String message;
     
     private String market;
     @JsonProperty("market_id")
     private Integer marketId;
     
-    private Integer leverage;           // 20
+    private Integer leverage;
     
     @JsonProperty("initial_margin_fraction")
-    private String initialMarginFraction;  // "5.00%"
+    private String initialMarginFraction;
     
     @JsonProperty("tx_hash")
     private String txHash;

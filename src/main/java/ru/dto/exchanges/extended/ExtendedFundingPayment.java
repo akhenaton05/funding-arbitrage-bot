@@ -32,20 +32,4 @@ public class ExtendedFundingPayment {
     
     @JsonProperty("paidTime")
     private long paidTime;
-
-    public double getFundingFeeAsDouble() {
-        try {
-            return Double.parseDouble(fundingFee);
-        } catch (NumberFormatException e) {
-            return 0.0;
-        }
-    }
-    
-    public double getFundingRateAsDouble() {
-        try {
-            return Double.parseDouble(fundingRate);
-        } catch (NumberFormatException e) {
-            return 0.0;
-        }
-    }
 }

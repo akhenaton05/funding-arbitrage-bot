@@ -21,6 +21,7 @@ public class ExtendedPositionMapper {
             double entryPrice = Double.parseDouble(extPos.getOpenPrice());
             double markPrice = Double.parseDouble(extPos.getMarkPrice());
             double unrealizedPnl = Double.parseDouble(extPos.getUnrealisedPnl());
+            double liquidationPrice = Double.parseDouble(extPos.getLiquidationPrice());
 
             Direction side = Direction.valueOf(extPos.getSide());
             
@@ -32,6 +33,7 @@ public class ExtendedPositionMapper {
                     .entryPrice(entryPrice)
                     .markPrice(markPrice)
                     .unrealizedPnl(unrealizedPnl)
+                    .liquidationPrice(liquidationPrice)
                     .build();
                     
         } catch (Exception e) {

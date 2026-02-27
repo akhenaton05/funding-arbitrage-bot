@@ -7,9 +7,9 @@ import lombok.Data;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class AsterBookTicker {
     private String symbol;
-    private String bidPrice;   // Лучшая цена покупки
-    private String bidQty;     // Количество на лучшем BID
-    private String askPrice;   // Лучшая цена продажи
-    private String askQty;     // Количество на лучшем ASK
-    private Long time;         // Timestamp
+    private String bidPrice;
+    private String bidQty;
+    private String askPrice;
+    private String askQty;
+    private Long time;
 }

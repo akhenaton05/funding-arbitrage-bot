@@ -8,7 +8,7 @@ import java.util.List;
 @Data
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class LighterMarketsResponse {
-    private String status;           // "OK"
+    private String status;
     private Integer count;
     private List<LighterMarket> data;
 }

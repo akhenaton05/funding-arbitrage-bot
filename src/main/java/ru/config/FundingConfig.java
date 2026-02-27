@@ -15,6 +15,7 @@ public class FundingConfig {
     private PnLConfig pnl;
     private SlTpConfig sltp;
     private OiConfig oi;
+    private Liquidation liq;
     
     @Data
     public static class ThresholdsConfig {
@@ -54,5 +55,11 @@ public class FundingConfig {
     public static class OiConfig {
         private boolean enabled ;
         private int maxRank;
+    }
+
+    @Data
+    public static class Liquidation {
+        private double warn;
+        private double critical;
     }
 }

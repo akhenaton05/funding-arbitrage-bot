@@ -10,19 +10,13 @@ import java.util.List;
 public class OrderBook {
     private ExchangeType exchange;
     private String symbol;
-    private Long timestamp;//Exchange timestamp
-    
-    // Best prices
-    private Double bestBid;//Highest buy price
-    private Double bestAsk;//Lowest sell price
-    
-    // Best sizes
-    private Double bestBidSize;//Size at best bid
-    private Double bestAskSize;//Size at best ask
-
-    // Full depth (optional)
-    private List<PriceLevel> bids;    // All bid levels
-    private List<PriceLevel> asks;    // All ask levels
+    private Long timestamp;
+    private Double bestBid;
+    private Double bestAsk;
+    private Double bestBidSize;
+    private Double bestAskSize;
+    private List<PriceLevel> bids;
+    private List<PriceLevel> asks;
     
     /**
      * Calculate spread in absolute terms

@@ -1,6 +1,5 @@
 package ru.exchanges;
 
-import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -10,6 +9,7 @@ import ru.dto.exchanges.*;
 import ru.dto.exchanges.extended.ExtendedFundingHistoryResponse;
 import ru.dto.exchanges.extended.ExtendedOrderBook;
 import ru.dto.exchanges.extended.ExtendedPosition;
+import ru.dto.exchanges.extended.ExtendedPositionHistory;
 import ru.dto.funding.FundingCloseSignal;
 import ru.exceptions.ClosingPositionException;
 import ru.mapper.extended.ExtendedOrderBookMapper;
@@ -22,7 +22,7 @@ import java.util.List;
 @Service
 @EnableScheduling
 @RequiredArgsConstructor
-public class Extended implements Exchange{
+public class Extended implements Exchange {
 
     private final ExtendedClient extendedClient;
     private static final double EXTENDED_TAKER_FEE = 0.00025; // 0.025%
@@ -46,11 +46,6 @@ public class Extended implements Exchange{
     }
 
     @Override
-    public void cancelAllOrders(String symbol) {
-
-    }
-
-    @Override
     public boolean supportsSlTp() {
         return false;
     }
@@ -58,8 +53,8 @@ public class Extended implements Exchange{
     @Override
     public int getOpenDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
-            case ASTER -> 0;  // Wait 4s for Extended to open
-            case LIGHTER -> 0;   // Wait 3s for Lighter to open
+            case ASTER -> 0;  // Wait 0s for Extended to open
+            case LIGHTER -> 0;   // Wait 0s for Lighter to open
             default -> 0;
         };
     }
@@ -68,7 +63,7 @@ public class Extended implements Exchange{
     public int getCloseDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
             case ASTER -> 0;  // Wait 3s for Extended to close
-            case LIGHTER -> 0;   // Wait 3.5s for Lighter to close
+            case LIGHTER -> 0;   // Wait 0s for Lighter to close
             default -> 0;
         };
     }
@@ -108,15 +103,10 @@ public class Extended implements Exchange{
     public List<Position> getPositions(String symbol, Direction side) {
         List<ExtendedPosition> ep = extendedClient.getPositions(formatSymbol(symbol), side.name());
         List<Position> positions = new ArrayList<>();
-        for(ExtendedPosition pos : ep) {
+        for (ExtendedPosition pos : ep) {
             positions.add(ExtendedPositionMapper.toPosition(pos));
         }
         return positions;
-    }
-
-    @Override
-    public boolean hasPosition(String symbol, Direction side) {
-        return false;
     }
 
     @Override
@@ -125,16 +115,24 @@ public class Extended implements Exchange{
             if (currentPairedExchange != null) {
                 int delay = getCloseDelay(currentPairedExchange);
                 if (delay > 0) {
-                    log.info("[Extended] Waiting {}ms before opening (paired with {})",
-                            delay, currentPairedExchange);
+                    log.info("[Extended] Waiting {}ms before closing (paired with {})", delay, currentPairedExchange);
                     Thread.sleep(delay);
                 }
             }
 
-            return extendedClient.closePosition(
-                    formatSymbol(symbol),
-                    String.valueOf(currentSide)
+            OrderResult result = extendedClient.closePosition(formatSymbol(symbol), String.valueOf(currentSide));
+            log.info("[ExtendedDex] Order closed with result: {}", result);
+
+            ExtendedPositionHistory positionResult = extendedClient.getLastClosedPosition(formatSymbol(symbol), String.valueOf(currentSide));
+            log.info("[ExtendedDex] Trade result for {}: {}", result.getOrderId(), positionResult);
+
+            //Setting Pnl without funding fees(applied later)
+            result.setRealizedPnl(Double.parseDouble(positionResult.getRealisedPnlBreakdown().getTradePnl())
+                    + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getCloseFees())
+                    + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getOpenFees())
             );
+
+            return result;
 
         } catch (InterruptedException e) {
             log.error("[Extended] Interrupted during close delay", e);
@@ -151,7 +149,7 @@ public class Extended implements Exchange{
     }
 
     @Override
-    public int getMaxLeverage(String symbol) {
+    public int getMaxLeverage(String symbol, int leverage) {
         return 0;
     }
 
@@ -283,5 +281,18 @@ public class Extended implements Exchange{
                     ticker, direction, e.getMessage(), e);
             return 0.0;
         }
+    }
+
+
+    @Override
+    public PositionRiskControl validatePositionRisk(String symbol, Direction direction) {
+        //Extended returns data from position request
+        List<Position> positions = getPositions(symbol, direction);
+        log.info("[Extended] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), positions.getFirst().getMarkPrice());
+
+        return PositionRiskControl.builder()
+                .liquidationPrice(positions.getFirst().getLiquidationPrice())
+                .markPrice(positions.getFirst().getMarkPrice())
+                .build();
     }
 }

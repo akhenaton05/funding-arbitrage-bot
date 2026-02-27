@@ -33,7 +33,6 @@ public class LighterPosition {
     @JsonProperty("funding_paid")
     private String fundingPaid;
 
-    // Fallback методы
     public String getOpenPrice() {
         return openPrice != null ? openPrice : "0";
     }

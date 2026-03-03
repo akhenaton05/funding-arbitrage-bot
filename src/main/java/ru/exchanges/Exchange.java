@@ -55,6 +55,4 @@ public interface Exchange {
     boolean supportsSlTp();
 
     PositionRiskControl validatePositionRisk(String symbol, Direction direction);
-
-//    double calculatePnl(FundingCloseSignal signal);
 }

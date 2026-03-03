@@ -15,7 +15,7 @@ public class FundingConfig {
     private PnLConfig pnl;
     private SlTpConfig sltp;
     private OiConfig oi;
-    private Liquidation liq;
+    private Liquidation liquidation;
     
     @Data
     public static class ThresholdsConfig {

@@ -288,6 +288,16 @@ public class Asterdex implements Exchange {
                     String.format("%.2f", notional),
                     String.format("%.4f", fundingPnl));
 
+            double realFunding = asterClient.getAccumulatedFundingFee(symbol, signal.getOpenedAtMs());
+
+            log.info("[Asterdex] Funding comparison: symbol={}, direction={}, " +
+                            "calculated={}, realFromAPI={}, diff={}",
+                    symbol,
+                    direction,
+                    String.format("%.6f", fundingPnl + prevFunding),
+                    String.format("%.6f", realFunding),
+                    String.format("%.6f", realFunding - (fundingPnl + prevFunding)));
+
             return fundingPnl + prevFunding;
 
         } catch (Exception e) {
@@ -336,9 +346,11 @@ public class Asterdex implements Exchange {
     public PositionRiskControl validatePositionRisk(String ticker, Direction direction) {
         //Aster returns data from position request
         List<Position> positions = getPositions(ticker, direction);
+        log.info("[Aster] PositionRisk position: {}", positions);
         log.info("[Aster] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), positions.getFirst().getMarkPrice());
 
         return PositionRiskControl.builder()
+                .entryPrice(positions.getFirst().getEntryPrice())
                 .liquidationPrice(positions.getFirst().getLiquidationPrice())
                 .markPrice(positions.getFirst().getMarkPrice())
                 .build();

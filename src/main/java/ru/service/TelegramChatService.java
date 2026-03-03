@@ -8,11 +8,17 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.ActionType;
+import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.send.SendChatAction;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.*;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import ru.config.*;
+import ru.dto.db.dto.TickerStats;
+import ru.dto.db.dto.TradeHistory;
+import ru.dto.db.model.Period;
 import ru.dto.funding.FundingCloseSignal;
 import ru.dto.exchanges.PositionBalance;
 import ru.dto.exchanges.PositionClosedEvent;
@@ -28,6 +34,7 @@ import ru.utils.FundingArbitrageContext;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +48,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
     private final FundingArbitrageContext fundingContext;
     private final FundingArbitrageService fundingService;
     private final ExchangesService exchangesService;
+    private final TradeHistoryService tradeHistoryService;
 
     @Override
     public String getBotUsername() {
@@ -70,8 +78,11 @@ public class TelegramChatService extends TelegramLongPollingBot {
                     handleCommand(chatId, userMessage);
                 }
             }
+        } else if (update.hasCallbackQuery()) {
+            handleCallbackQuery(update.getCallbackQuery());
         }
     }
+
 
     private void handleCommand(Long chatId, String command) {
         String[] parts = command.trim().split("\\s+", 2);
@@ -86,6 +97,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
             case "/closeall" -> closeAllPositions();
             case "/pnl" -> calculatePositionPnl(chatId, parts);
             case "/balance" -> getExchangesBalance(chatId);
+            case "/history" -> getTradeHistory(chatId);
         }
     }
 
@@ -174,11 +186,10 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         result.forEach((exchange, balance) -> {
             if (exchange.equals("TOTAL")) return;
-            sb.append(String.format("\uD83D\uDDFF *%s:* `$%.2f`\n", exchange, balance));
+            sb.append(String.format("\uD83D\uDDFF *%s:* $%.2f\n", exchange, balance));
         });
-
-        sb.append("\n─────────────────\n");
-        sb.append(String.format("💵 *Total: * `$%.2f`", result.getOrDefault("TOTAL", 0.0)));
+        
+        sb.append(String.format("💵 *Total: * $%.2f", result.getOrDefault("TOTAL", 0.0)));
 
         sendMessage(chatId, sb.toString());
     }
@@ -314,6 +325,38 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         sendMessage(chatId, message);
     }
+//
+//    private void getTradeHistory(Long chatId) {
+//        log.info("[Telegram] Trade history request from chat {}", chatId);
+//        sendTypingAction(chatId);
+//
+//        SendMessage message = new SendMessage();
+//        message.setChatId(chatId);
+//        message.setText("🤖 *FundingBot:* Choose period:");
+//        message.setParseMode("Markdown");
+//
+//        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+//        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+//
+//        rows.add(createButtonRow(
+//                "📅 Today",  "history:DAY",
+//                "📅 Week", "history:WEEK"
+//        ));
+//        rows.add(createButtonRow(
+//                "📅 Month",  "history:MONTH",
+//                "📋 All",    "history:ALL"
+//        ));
+//
+//        markup.setKeyboard(rows);
+//        message.setReplyMarkup(markup);
+//
+//        try {
+//            execute(message);
+//        } catch (TelegramApiException e) {
+//            log.error("[Telegram] Failed to send history menu", e);
+//        }
+//    }
+
 
     public String formatBalanceMap(Map<String, PositionBalance> balanceMap,
                                    Map<String, FundingCloseSignal> openedPositions) {
@@ -557,5 +600,206 @@ public class TelegramChatService extends TelegramLongPollingBot {
                 event.getMessage(),
                 pnl.getNetPnl()
         );
+    }
+
+//    private String formatTradeHistory(Long chatId) {
+//        TradeHistory day   = tradeHistoryService.getStats(Period.DAY);
+//        TradeHistory week  = tradeHistoryService.getStats(Period.WEEK);
+//        TradeHistory month = tradeHistoryService.getStats(Period.MONTH);
+//        TradeHistory all   = tradeHistoryService.getStats(Period.ALL);
+//
+//        StringBuilder sb = new StringBuilder();
+//        sb.append("🤖 *FundingBot:* Trade History 📈\n");
+//        sb.append("━━━━━━━━━━━━━━━━━━\n\n");
+//
+//        sb.append(formatStatsPeriod("Today", day));
+//        sb.append(formatStatsPeriod("7 Days", week));
+//        sb.append(formatStatsPeriod("30 Days", month));
+//        sb.append(formatStatsPeriod("All Time", all));
+//
+//        return sb.toString();
+//    }
+//
+//    private String formatStatsPeriod(String label, TradeStats stats) {
+//        if (stats.getTotalTrades() == 0) {
+//            return String.format("📅 *%s:* _No trades_\n\n", label);
+//        }
+//
+//        String pnlEmoji = stats.getTotalPnl() >= 0 ? "\uD83D\uDCB0" : "\uD83E\uDDF1";
+//        String sign = stats.getTotalPnl() >= 0 ? "+" : "";
+//
+//        return String.format(
+//                "📅 *%s*\n" +
+//                        "%s *P&L:* %s$%.2f\n" +
+//                        "📊 *Win Rate:* %d/%d (%.1f%%)\n" +
+//                        "🏆 *Best:* +$%.2f  💀 *Worst:* $%.2f\n\n",
+//                label,
+//                pnlEmoji,
+//                sign,
+//                stats.getTotalPnl(),
+//                stats.getWins(),
+//                stats.getTotalTrades(),
+//                stats.getWinRate(),
+//                stats.getBestTrade(),
+//                stats.getWorstTrade()
+//        );
+//    }
+
+    private List<InlineKeyboardButton> createButtonRow(String text1, String callback1, String text2, String callback2) {
+        List<InlineKeyboardButton> row = new ArrayList<>();
+
+        InlineKeyboardButton btn1 = new InlineKeyboardButton();
+        btn1.setText(text1);
+        btn1.setCallbackData(callback1);
+        row.add(btn1);
+
+        if (text2 != null && callback2 != null) {
+            InlineKeyboardButton btn2 = new InlineKeyboardButton();
+            btn2.setText(text2);
+            btn2.setCallbackData(callback2);
+            row.add(btn2);
+        }
+
+        return row;
+    }
+
+    /**
+     * History
+     */
+
+    private void getTradeHistory(Long chatId) {
+        log.info("[Telegram] Trade history request from chat {}", chatId);
+        sendTypingAction(chatId);
+
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText("🤖 *FundingBot:* Choose period:");
+        message.setParseMode("Markdown");
+
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(createButtonRow("📅 Today", "history:DAY",  "📅 Week",  "history:WEEK"));
+        rows.add(createButtonRow("📅 Month", "history:MONTH", "📋 All",  "history:ALL"));
+        markup.setKeyboard(rows);
+        message.setReplyMarkup(markup);
+
+        try {
+            execute(message);
+        } catch (TelegramApiException e) {
+            log.error("[Telegram] Failed to send history menu", e);
+        }
+    }
+
+    private void handleHistoryCallback(Long chatId, String periodStr) {
+        try {
+            Period period = Period.valueOf(periodStr);
+            sendMessage(chatId, formatSinglePeriod(period));
+        } catch (IllegalArgumentException e) {
+            sendMessage(chatId, "❌ Unknown period: " + periodStr);
+        }
+    }
+
+    private String formatSinglePeriod(Period period) {
+        TradeHistory stats = tradeHistoryService.getStats(period);
+
+        String label = switch (period) {
+            case DAY   -> "Today";
+            case WEEK  -> "7 Days";
+            case MONTH -> "30 Days";
+            case ALL   -> "All Time";
+        };
+
+        if (stats.getTotalTrades() == 0) {
+            return String.format("🤖 *FundingBot:* Trade History\n\n📅 *%s* — _No trades_", label);
+        }
+
+        return String.format("""
+            🤖 *FundingBot:* Trade History 📈
+            ━━━━━━━━━━━━━━━━━
+            📅 *%s*  |  *%d Orders*  |  💼 *%.2f$ Volume*
+                        
+            💰 *P&L:*
+            *Total:* %s%.2f$ / %s%.2f%% ROI
+            *Avg/trade:* %s%.2f$
+            *Funding:* %s%.2f$ (%.1f%% from P&L)
+                        
+            🎯 *Stats:*
+            *Win Rate:* %d/%d (%.1f%%)
+            *Best:* +%.2f$ / Worst: %.2f$
+                        
+            📦 *Funding:*
+            *Avg:* %.2f%% → %.2f%% / *Delta:* %s%.2f%%
+            (%s)
+                        
+            ⌛️ *Hold time:*
+            *Avg:* %s / *Max:* %s %s / *Min:* %s %s
+                        
+            🪙 *Tickers:*
+            %s""",
+                //header
+                label, stats.getTotalTrades(), stats.getTotalVolume(),
+                // P&L
+                stats.getTotalPnl() >= 0 ? "+" : "", stats.getTotalPnl(),
+                stats.getPnlToVolumePercent() >= 0 ? "+" : "", stats.getPnlToVolumePercent(),
+                stats.getAvgPnlPerTrade() >= 0 ? "+" : "", stats.getAvgPnlPerTrade(),
+                stats.getTotalFunding() >= 0 ? "+" : "", stats.getTotalFunding(),
+                stats.getFundingToPnlPercent(),
+                //Stats
+                stats.getWins(), stats.getTotalTrades(), stats.getWinRate(),
+                stats.getBestTrade(), stats.getWorstTrade(),
+                //Funding
+                stats.getAvgOpenRate(), stats.getAvgCloseRate(),
+                stats.getAvgRateDelta() >= 0 ? "+" : "", stats.getAvgRateDelta(),
+                stats.getAvgRateDelta() < 0
+                        ? "Closing after rate is down"
+                        : "Closing after rate is up",
+                //Hold time
+                formatDuration(stats.getAvgHoldTime()),
+                stats.getMaxHoldTicker(), formatDuration(stats.getMaxHoldTime()),
+                stats.getMinHoldTicker(), formatDuration(stats.getMinHoldTime()),
+                //Tickers
+                formatTickerStats(stats.getTickerStats())
+        );
+    }
+
+    private String formatDuration(Duration d) {
+        if (d == null) return "—";
+        long hours   = d.toHours();
+        long minutes = d.toMinutesPart();
+        if (hours > 0) return hours + "h " + minutes + "m";
+        return minutes + "m";
+    }
+
+    private String formatTickerStats(List<TickerStats> tickers) {
+        if (tickers == null || tickers.isEmpty()) return "  _no data_";
+        StringBuilder sb = new StringBuilder();
+        for (TickerStats t : tickers) {
+            sb.append(String.format("*%s:* %s$%.2f / %d Orders / Winrate %.0f%%%n",
+                    t.getTicker(),
+                    t.getTotalPnl() >= 0 ? "+" : "",
+                    t.getTotalPnl(),
+                    t.getTradeCount(),
+                    t.getWinRate()));
+        }
+        return sb.toString().stripTrailing();
+    }
+
+    private void handleCallbackQuery(CallbackQuery callbackQuery) {
+        String callbackId = callbackQuery.getId();
+        String data       = callbackQuery.getData();
+        Long   chatId     = callbackQuery.getMessage().getChatId();
+
+        AnswerCallbackQuery answer = new AnswerCallbackQuery();
+        answer.setCallbackQueryId(callbackId);
+        answer.setShowAlert(false);
+        try {
+            execute(answer);
+        } catch (TelegramApiException e) {
+            log.error("[Telegram] Error answering callback", e);
+        }
+
+        if (data.startsWith("history:")) {
+            handleHistoryCallback(chatId, data.substring(8));
+        }
     }
 }

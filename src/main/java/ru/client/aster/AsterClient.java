@@ -192,31 +192,6 @@ public class AsterClient {
     /**
      * Leverage
      */
-//
-//    public String setLeverage(String symbol, int leverage) {
-//        StringBuilder params = new StringBuilder();
-//        params.append("symbol=").append(symbol);
-//        params.append("&leverage=").append(leverage);
-//
-//        String response = executeSignedRequest("POST", "/fapi/v1/leverage", params.toString());
-//
-//        log.info("[Aster] setLeverage response for {}: {}", symbol, response);
-//
-//        if (response != null && !response.isEmpty()) {
-//            try {
-//                JsonNode node = objectMapper.readTree(response);
-//                int code = node.path("code").asInt(200);
-//                if (code != 200) {
-//                    log.error("[Aster] setLeverage failed for {} code={} msg={}",
-//                            symbol, code, node.path("msg").asText());
-//                    return null;
-//                }
-//            } catch (Exception e) {
-//                log.warn("[Aster] Failed to parse setLeverage response", e);
-//            }
-//        }
-//        return response;
-//    }
 
     public boolean setLeverage(String symbol, int leverage) {
         StringBuilder params = new StringBuilder();
@@ -1127,13 +1102,10 @@ public class AsterClient {
                         catch (Exception e) { return 0.0; }
                     }).sum();
 
-            // Средняя цена исполнения
             double avgPrice = totalQty > 0 ? totalQuoteQty / totalQty : 0.0;
 
-            // Берём мета-данные из последнего трейда
             AsterTrade last = orderTrades.getLast();
 
-            // Собираем итоговый объект
             AsterTrade result = new AsterTrade();
             result.setOrderId(orderId);
             result.setSymbol(symbol);
@@ -1159,4 +1131,46 @@ public class AsterClient {
             return null;
         }
     }
+
+    public double getAccumulatedFundingFee(String symbol, long openedAt) {
+        try {
+            String queryParams = "symbol=" + symbol
+                    + "&incomeType=FUNDING_FEE"
+                    + "&startTime=" + openedAt
+                    + "&limit=100";
+
+            String json = executeSignedRequest("GET", "/fapi/v1/income", queryParams);
+            if (json == null || json.isBlank()) {
+                log.warn("[Aster] getAccumulatedFundingFee: empty response for {}", symbol);
+                return 0.0;
+            }
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> incomes = objectMapper.readValue(
+                    json,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, Map.class));
+
+            if (incomes == null || incomes.isEmpty()) {
+                log.info("[Aster] getAccumulatedFundingFee: no funding entries for {} since {}", symbol, openedAt);
+                return 0.0;
+            }
+
+            double total = incomes.stream()
+                    .mapToDouble(e -> {
+                        try { return Double.parseDouble((String) e.get("income")); }
+                        catch (Exception ex) { return 0.0; }
+                    })
+                    .sum();
+
+            log.info("[Aster] Accumulated funding fee: symbol={}, entries={}, total={}, since={}",
+                    symbol, incomes.size(), String.format("%.6f", total), openedAt);
+
+            return total;
+
+        } catch (Exception e) {
+            log.error("[Aster] getAccumulatedFundingFee error for {}: {}", symbol, e.getMessage());
+            return 0.0;
+        }
+    }
+
 }

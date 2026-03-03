@@ -59,7 +59,7 @@ KNOWN_MAX_LEVERAGE: dict[str, int] = {
     "LINK": 10, "AAVE": 10, "MKR": 10, "CRV": 10,
     "DOT": 10, "ALGO": 10, "FTM": 10, "ICP": 10,
     "NMR": 8, "COIN": 8, "LDO": 8,
-    "MEGA": 5, "PEPE": 5, "BONK": 5, "SHIB": 5,
+    "MEGA": 3, "PEPE": 5, "BONK": 5, "SHIB": 5,
     "PIPPIN": 3, "DEGEN": 3, "FLOKI": 3, "RIVER": 3,
     "ARC": 3, "ZORA": 3, "STABLE": 3, "MYX": 3,
     "VVV": 3, "USELESS": 3, "AERO": 3, "SKR": 3,

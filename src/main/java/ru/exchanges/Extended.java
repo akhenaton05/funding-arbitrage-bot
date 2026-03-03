@@ -109,6 +109,40 @@ public class Extended implements Exchange {
         return positions;
     }
 
+//    @Override
+//    public OrderResult closePosition(String symbol, Direction currentSide) {
+//        try {
+//            if (currentPairedExchange != null) {
+//                int delay = getCloseDelay(currentPairedExchange);
+//                if (delay > 0) {
+//                    log.info("[Extended] Waiting {}ms before closing (paired with {})", delay, currentPairedExchange);
+//                    Thread.sleep(delay);
+//                }
+//            }
+//
+//            OrderResult result = extendedClient.closePosition(formatSymbol(symbol), String.valueOf(currentSide));
+//            log.info("[ExtendedDex] Order closed with result: {}", result);
+//
+//            ExtendedPositionHistory positionResult = extendedClient.getLastClosedPosition(formatSymbol(symbol), String.valueOf(currentSide));
+//            log.info("[ExtendedDex] Trade result for {}: {}", result.getOrderId(), positionResult);
+//
+//            //Setting Pnl without funding fees(applied later)
+//            result.setRealizedPnl(Double.parseDouble(positionResult.getRealisedPnlBreakdown().getTradePnl())
+//                    + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getCloseFees())
+//                    + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getOpenFees())
+//            );
+//
+//            return result;
+//
+//        } catch (InterruptedException e) {
+//            log.error("[Extended] Interrupted during close delay", e);
+//            Thread.currentThread().interrupt();
+//            throw new ClosingPositionException("[Extended] Interrupted during close");
+//        } catch (Exception e) {
+//            throw new ClosingPositionException("[Extended] Error closing position - manual check required");
+//        }
+//    }
+
     @Override
     public OrderResult closePosition(String symbol, Direction currentSide) {
         try {
@@ -120,16 +154,23 @@ public class Extended implements Exchange {
                 }
             }
 
+            long closeInitiatedAt = System.currentTimeMillis();
             OrderResult result = extendedClient.closePosition(formatSymbol(symbol), String.valueOf(currentSide));
             log.info("[ExtendedDex] Order closed with result: {}", result);
 
-            ExtendedPositionHistory positionResult = extendedClient.getLastClosedPosition(formatSymbol(symbol), String.valueOf(currentSide));
+            ExtendedPositionHistory positionResult = getLastClosedPositionWithRetry(
+                    formatSymbol(symbol), String.valueOf(currentSide), closeInitiatedAt);
+
+            if (positionResult == null) {
+                throw new ClosingPositionException("[Extended] Could not get closed position from history - manual check required");
+            }
+
             log.info("[ExtendedDex] Trade result for {}: {}", result.getOrderId(), positionResult);
 
-            //Setting Pnl without funding fees(applied later)
-            result.setRealizedPnl(Double.parseDouble(positionResult.getRealisedPnlBreakdown().getTradePnl())
-                    + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getCloseFees())
-                    + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getOpenFees())
+            result.setRealizedPnl(
+                    Double.parseDouble(positionResult.getRealisedPnlBreakdown().getTradePnl())
+                            + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getCloseFees())
+                            + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getOpenFees())
             );
 
             return result;
@@ -138,10 +179,36 @@ public class Extended implements Exchange {
             log.error("[Extended] Interrupted during close delay", e);
             Thread.currentThread().interrupt();
             throw new ClosingPositionException("[Extended] Interrupted during close");
+        } catch (ClosingPositionException e) {
+            throw e;
         } catch (Exception e) {
             throw new ClosingPositionException("[Extended] Error closing position - manual check required");
         }
     }
+
+    private ExtendedPositionHistory getLastClosedPositionWithRetry(String market, String side, long closeInitiatedAt) throws InterruptedException {
+        for (int attempt = 1; attempt <= 8; attempt++) {
+            Thread.sleep(attempt == 1 ? 5_000 : 3_000);
+
+            ExtendedPositionHistory candidate = extendedClient.getLastClosedPosition(market, side);
+
+            if (candidate != null
+                    && candidate.getClosedTime() != null
+                    && candidate.getClosedTime() >= closeInitiatedAt) {
+                log.info("[Extended] Fresh closed position found on attempt {}/{}", attempt, 8);
+                return candidate;
+            }
+
+            log.warn("[Extended] Attempt {}/8: stale closedTime={}, expected >={}, retrying...",
+                    attempt,
+                    candidate != null ? candidate.getClosedTime() : "null",
+                    closeInitiatedAt);
+        }
+
+        log.error("[Extended] Could not get fresh closed position after 8 attempts (~29s total)");
+        return null;
+    }
+
 
     @Override
     public String setLeverage(String symbol, int leverage) {
@@ -283,14 +350,15 @@ public class Extended implements Exchange {
         }
     }
 
-
     @Override
     public PositionRiskControl validatePositionRisk(String symbol, Direction direction) {
         //Extended returns data from position request
         List<Position> positions = getPositions(symbol, direction);
+        log.info("[Extended] PositionRisk position: {}", positions);
         log.info("[Extended] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), positions.getFirst().getMarkPrice());
 
         return PositionRiskControl.builder()
+                .entryPrice(positions.getFirst().getEntryPrice())
                 .liquidationPrice(positions.getFirst().getLiquidationPrice())
                 .markPrice(positions.getFirst().getMarkPrice())
                 .build();

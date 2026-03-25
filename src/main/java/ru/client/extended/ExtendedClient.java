@@ -217,23 +217,25 @@ public class ExtendedClient {
             double stepSize = getStepSize(market);
             double roundedSize = roundToStepSize(size, stepSize);
 
-            // ✅ ИСПРАВЛЕНИЕ: берём цену из стакана, а не mark price
             ExtendedOrderBook orderBook = getOrderBook(market);
             double referencePrice;
+            double slippagePct;
+
             if (orderBook != null) {
                 boolean isBuy = direction.equalsIgnoreCase("LONG");
                 List<OrderBookLevel> levels = isBuy ? orderBook.getAsk() : orderBook.getBid();
                 if (levels != null && !levels.isEmpty()) {
                     referencePrice = Double.parseDouble(levels.get(0).getPrice());
-                    log.info("[Extended] Using orderbook {} price for {}: ${}",
-                            isBuy ? "ask" : "bid", market, referencePrice);
+                    slippagePct = 10.0;
+                    log.info("[Extended] Using orderbook {} price for {}: ${}, slippage={}%",
+                            isBuy ? "ask" : "bid", market, referencePrice, slippagePct);
                 } else {
-                    referencePrice = getMarkPrice(market);
-                    log.warn("[Extended] Orderbook empty, fallback to mark price: ${}", referencePrice);
+                    log.warn("[Extended] Orderbook empty for {} — refusing to open (no liquidity)", market);
+                    return null;
                 }
             } else {
-                referencePrice = getMarkPrice(market);
-                log.warn("[Extended] Orderbook unavailable, fallback to mark price: ${}", referencePrice);
+                log.warn("[Extended] Orderbook unavailable for {} — refusing to open", market);
+                return null;
             }
 
             if (referencePrice <= 0) {
@@ -248,7 +250,7 @@ public class ExtendedClient {
                     String.format("%.2f", notional),
                     stepSize);
 
-            String externalId = openMarketPosition(market, side, roundedSize, 2.0);
+            String externalId = openMarketPosition(market, side, roundedSize, slippagePct);
 
             if (externalId == null) {
                 log.error("[Extended] Failed to open position with size {}", roundedSize);
@@ -268,7 +270,6 @@ public class ExtendedClient {
         }
     }
 
-
 //    public String openPositionWithSize(String market, double size, String direction) {
 //        String side = direction.equalsIgnoreCase("LONG") ? "BUY" : "SELL";
 //
@@ -276,38 +277,45 @@ public class ExtendedClient {
 //            log.info("[Extended] Opening position by size: market={}, size={}, direction={}",
 //                    market, String.format("%.4f", size), direction);
 //
-//            // Validate size
 //            if (size <= 0) {
 //                log.error("[Extended] Invalid size: {}", size);
 //                return null;
 //            }
 //
-//            // Get step_size for rounding
 //            double stepSize = getStepSize(market);
 //            double roundedSize = roundToStepSize(size, stepSize);
 //
-//            if (roundedSize < size * 0.95) {
-//                log.warn("[Extended] Size rounded down significantly: {} → {}",
-//                        String.format("%.4f", size),
-//                        String.format("%.4f", roundedSize));
+//            // ✅ ИСПРАВЛЕНИЕ: берём цену из стакана, а не mark price
+//            ExtendedOrderBook orderBook = getOrderBook(market);
+//            double referencePrice;
+//            if (orderBook != null) {
+//                boolean isBuy = direction.equalsIgnoreCase("LONG");
+//                List<OrderBookLevel> levels = isBuy ? orderBook.getAsk() : orderBook.getBid();
+//                if (levels != null && !levels.isEmpty()) {
+//                    referencePrice = Double.parseDouble(levels.get(0).getPrice());
+//                    log.info("[Extended] Using orderbook {} price for {}: ${}",
+//                            isBuy ? "ask" : "bid", market, referencePrice);
+//                } else {
+//                    referencePrice = getMarkPrice(market);
+//                    log.warn("[Extended] Orderbook empty, fallback to mark price: ${}", referencePrice);
+//                }
+//            } else {
+//                referencePrice = getMarkPrice(market);
+//                log.warn("[Extended] Orderbook unavailable, fallback to mark price: ${}", referencePrice);
 //            }
 //
-//            // Get current price for logging
-//            double price = getMarkPrice(market);
-//            if (price <= 0) {
-//                log.error("[Extended] Failed to get mark price for {}", market);
+//            if (referencePrice <= 0) {
+//                log.error("[Extended] Failed to get price for {}", market);
 //                return null;
 //            }
 //
-//            double notional = roundedSize * price;
-//
+//            double notional = roundedSize * referencePrice;
 //            log.info("[Extended] Position params: size={}, price=${}, notional=${}, step_size={}",
 //                    String.format("%.4f", roundedSize),
-//                    String.format("%.6f", price),
+//                    String.format("%.6f", referencePrice),
 //                    String.format("%.2f", notional),
 //                    stepSize);
 //
-//            // Open market position with exact size
 //            String externalId = openMarketPosition(market, side, roundedSize, 2.0);
 //
 //            if (externalId == null) {
@@ -888,42 +896,6 @@ public class ExtendedClient {
             return null;
         }
     }
-
-
-//    public Double calculateMaxSizeForMargin(String market, double marginUsd, int leverage, boolean isBuy) {
-//        try {
-//            double notional = marginUsd * leverage;
-//
-//            // Get execution price from order book
-//            Double executionPrice = estimateExecutionPrice(market, notional / 1000.0, !isBuy);
-//
-//            if (executionPrice == null) {
-//                // Fallback to mark price
-//                executionPrice = getMarkPrice(market);
-//                if (executionPrice <= 0) {
-//                    log.error("[Extended] Failed to get price for {}", market);
-//                    return null;
-//                }
-//                log.warn("[Extended] Using mark price as fallback: ${}",
-//                        String.format("%.6f", executionPrice));
-//            }
-//
-//            double maxSize = notional / executionPrice;
-//
-//            log.info("[Extended] Max size for margin ${} @ {}x: {} {} (price: ${})",
-//                    String.format("%.2f", marginUsd),
-//                    leverage,
-//                    String.format("%.4f", maxSize),
-//                    market.split("-")[0],
-//                    String.format("%.6f", executionPrice));
-//
-//            return maxSize;
-//
-//        } catch (Exception e) {
-//            log.error("[Extended] Error calculating max size for {}", market, e);
-//            return null;
-//        }
-//    }
 
     public ExtendedPositionHistory getLastClosedPosition(String market, String side) {
         try {

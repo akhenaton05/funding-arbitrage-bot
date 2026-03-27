@@ -56,15 +56,13 @@ public class ExchangesService {
     /**
      * Listeners & Scheduled tasks
      */
-
     @EventListener
     @Async
     public void handleArbitrageSignal(NewArbitrageEvent event) {
         log.info("[FundingBot] Received arbitrage signal for {}", event.getSignal().getTicker());
 
-        // Проверяем дубли
         if (isPositionAlreadyOpen(event.getSignal())) {
-            log.warn("[FundingBot] Skipping {}: position already open on same exchanges", event.getSignal().getTicker());
+            log.warn("[FundingBot] Skipping {}: position already opened on same exchanges", event.getSignal().getTicker());
             return;
         }
 
@@ -81,7 +79,7 @@ public class ExchangesService {
             return;
         }
 
-        log.info("[FundingBot] Funding time! Checking Fast mode positions");
+        log.info("[FundingBot] Funding time! Checking opened positions");
 
         List<String> toClose = new ArrayList<>();
 
@@ -164,13 +162,13 @@ public class ExchangesService {
             return;
         }
 
-        log.info("[FundingBot] Predicting Aster funding for {} positions", openedPositions.size());
+        log.info("[FundingBot] Predicting funding for {} positions", openedPositions.size());
 
         for (FundingCloseSignal signal : openedPositions.values()) {
             try {
                 updateFunding(signal);
             } catch (Exception e) {
-                log.error("[FundingBot] Failed to predict Aster funding for {}: {}",
+                log.error("[FundingBot] Failed to predict funding for {}: {}",
                         signal.getId(), e.getMessage());
             }
         }

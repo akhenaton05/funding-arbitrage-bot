@@ -226,7 +226,7 @@ public class ExtendedClient {
                 List<OrderBookLevel> levels = isBuy ? orderBook.getAsk() : orderBook.getBid();
                 if (levels != null && !levels.isEmpty()) {
                     referencePrice = Double.parseDouble(levels.get(0).getPrice());
-                    slippagePct = 10.0;
+                    slippagePct = 6.0;
                     log.info("[Extended] Using orderbook {} price for {}: ${}, slippage={}%",
                             isBuy ? "ask" : "bid", market, referencePrice, slippagePct);
                 } else {

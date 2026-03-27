@@ -256,12 +256,12 @@ public class Asterdex implements Exchange {
                 log.warn("[Aster] Failed to get premium index for {}", symbol);
                 return prevFunding;
             }
-
-            long minutesUntilFunding = premium.getMinutesUntilFunding();
-            if (minutesUntilFunding > 10) {
-                log.debug("[Aster] Funding too far: {} min", minutesUntilFunding);
-                return prevFunding;
-            }
+//
+//            long minutesUntilFunding = premium.getMinutesUntilFunding();
+//            if (minutesUntilFunding > 10) {
+//                log.debug("[Aster] Funding too far: {} min", minutesUntilFunding);
+//                return prevFunding;
+//            }
 
             List<Position> positions = getPositions(ticker, direction);
             if (positions.isEmpty()) {

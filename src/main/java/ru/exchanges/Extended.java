@@ -88,7 +88,7 @@ public class Extended implements Exchange {
         double balance = extendedClient.getBalance();
         return Balance.builder()
                 .balance(balance)
-                .margin(balance * 0.85)
+                .margin(balance * 0.75)
                 .build();
     }
 
@@ -108,40 +108,6 @@ public class Extended implements Exchange {
         }
         return positions;
     }
-
-//    @Override
-//    public OrderResult closePosition(String symbol, Direction currentSide) {
-//        try {
-//            if (currentPairedExchange != null) {
-//                int delay = getCloseDelay(currentPairedExchange);
-//                if (delay > 0) {
-//                    log.info("[Extended] Waiting {}ms before closing (paired with {})", delay, currentPairedExchange);
-//                    Thread.sleep(delay);
-//                }
-//            }
-//
-//            OrderResult result = extendedClient.closePosition(formatSymbol(symbol), String.valueOf(currentSide));
-//            log.info("[ExtendedDex] Order closed with result: {}", result);
-//
-//            ExtendedPositionHistory positionResult = extendedClient.getLastClosedPosition(formatSymbol(symbol), String.valueOf(currentSide));
-//            log.info("[ExtendedDex] Trade result for {}: {}", result.getOrderId(), positionResult);
-//
-//            //Setting Pnl without funding fees(applied later)
-//            result.setRealizedPnl(Double.parseDouble(positionResult.getRealisedPnlBreakdown().getTradePnl())
-//                    + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getCloseFees())
-//                    + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getOpenFees())
-//            );
-//
-//            return result;
-//
-//        } catch (InterruptedException e) {
-//            log.error("[Extended] Interrupted during close delay", e);
-//            Thread.currentThread().interrupt();
-//            throw new ClosingPositionException("[Extended] Interrupted during close");
-//        } catch (Exception e) {
-//            throw new ClosingPositionException("[Extended] Error closing position - manual check required");
-//        }
-//    }
 
     @Override
     public OrderResult closePosition(String symbol, Direction currentSide) {

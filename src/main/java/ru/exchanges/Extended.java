@@ -250,8 +250,8 @@ public class Extended implements Exchange {
     @Override
     public double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal, Double prevFunding) {
         try {
-            //Waiting 40 seconds for data to load up
-            Thread.sleep(40000);
+            //Waiting 60 seconds for data to load up
+            Thread.sleep(60000);
 
             long adjustedFromTime = signal.getOpenedAtMs() + 1000;
 

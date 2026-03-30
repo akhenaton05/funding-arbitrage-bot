@@ -491,7 +491,7 @@ public class ExchangesService {
 
         // Waiting for positions to be visible
         try {
-            Thread.sleep(4000);
+            Thread.sleep(7000);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("[FundingBot] Interrupted during sleep", e);

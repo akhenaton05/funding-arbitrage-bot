@@ -10,6 +10,7 @@ import ru.dto.exchanges.aster.*;
 import ru.dto.funding.FundingCloseSignal;
 import ru.exceptions.ClosingPositionException;
 import ru.exceptions.OpeningPositionException;
+import ru.exceptions.aster.AsterApiException;
 import ru.mapper.aster.AsterOrderBookMapper;
 import ru.mapper.aster.AsterPositionMapper;
 
@@ -246,22 +247,73 @@ public class Asterdex implements Exchange {
         }
     }
 
+//    @Override
+//    public double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal, Double prevFunding) {
+//        try {
+//            String symbol = formatSymbol(ticker);
+//
+//            PremiumIndexResponse premium = asterClient.getPremiumIndexInfo(symbol);
+//            if (premium == null) {
+//                log.warn("[Aster] Failed to get premium index for {}", symbol);
+//                return prevFunding;
+//            }
+////
+////            long minutesUntilFunding = premium.getMinutesUntilFunding();
+////            if (minutesUntilFunding > 10) {
+////                log.debug("[Aster] Funding too far: {} min", minutesUntilFunding);
+////                return prevFunding;
+////            }
+//
+//            List<Position> positions = getPositions(ticker, direction);
+//            if (positions.isEmpty()) {
+//                log.debug("[Aster] No position found for {} {}", ticker, direction);
+//                return prevFunding;
+//            }
+//
+//            Position pos = positions.getFirst();
+//
+//            double size = pos.getSize();
+//            double markPrice = premium.getMarkPriceAsDouble();
+//            double notional = size * markPrice;
+//            double fundingRate = premium.getLastFundingRateAsDouble();
+//
+//            boolean isLong = direction == Direction.LONG;
+//            double fundingPnl = isLong
+//                    ? -notional * fundingRate
+//                    : notional * fundingRate;
+//
+//            log.info("[Aster] Funding: {} {} rate={}%, notional=${}, pnl=${}",
+//                    ticker,
+//                    direction,
+//                    String.format("%.6f", fundingRate * 100),
+//                    String.format("%.2f", notional),
+//                    String.format("%.4f", fundingPnl));
+//
+//            double realFunding = asterClient.getAccumulatedFundingFee(symbol, signal.getOpenedAtMs());
+//
+//            log.info("[Asterdex] Funding comparison: symbol={}, direction={}, " +
+//                            "calculated={}, realFromAPI={}, diff={}",
+//                    symbol,
+//                    direction,
+//                    String.format("%.6f", fundingPnl + prevFunding),
+//                    String.format("%.6f", realFunding),
+//                    String.format("%.6f", realFunding - (fundingPnl + prevFunding)));
+//
+//            return fundingPnl + prevFunding;
+//
+//        } catch (Exception e) {
+//            log.error("[Aster] Error calculating funding for {} {}: {}",
+//                    ticker, direction, e.getMessage());
+//            return prevFunding;
+//        }
+//    }
+
     @Override
     public double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal, Double prevFunding) {
         try {
             String symbol = formatSymbol(ticker);
 
             PremiumIndexResponse premium = asterClient.getPremiumIndexInfo(symbol);
-            if (premium == null) {
-                log.warn("[Aster] Failed to get premium index for {}", symbol);
-                return prevFunding;
-            }
-//
-//            long minutesUntilFunding = premium.getMinutesUntilFunding();
-//            if (minutesUntilFunding > 10) {
-//                log.debug("[Aster] Funding too far: {} min", minutesUntilFunding);
-//                return prevFunding;
-//            }
 
             List<Position> positions = getPositions(ticker, direction);
             if (positions.isEmpty()) {
@@ -300,6 +352,9 @@ public class Asterdex implements Exchange {
 
             return fundingPnl + prevFunding;
 
+        } catch (AsterApiException e) {
+            log.error("[Aster] AsterApiError calculating funding: {}", e.getMessage());
+            throw e;
         } catch (Exception e) {
             log.error("[Aster] Error calculating funding for {} {}: {}",
                     ticker, direction, e.getMessage());

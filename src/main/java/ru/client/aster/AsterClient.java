@@ -11,6 +11,7 @@ import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
+import org.apache.hc.core5.http.ParseException;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.net.URIBuilder;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -18,9 +19,14 @@ import org.springframework.stereotype.Component;
 import ru.dto.exchanges.ExchangeType;
 import ru.dto.exchanges.OrderResult;
 import ru.dto.exchanges.aster.*;
+import ru.exceptions.aster.AsterApiException;
+import ru.exceptions.aster.AsterIpBanException;
+import ru.exceptions.aster.AsterRateLimitException;
+import ru.exceptions.aster.AsterUnknownExecutionException;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URI;
@@ -54,7 +60,6 @@ public class AsterClient {
     /**
      * Initialisation
      */
-
     @PostConstruct
     public void init() {
         syncServerTime();
@@ -109,7 +114,6 @@ public class AsterClient {
     /**
      * Executions with signed requests
      */
-
     private String executePublicGet(String endpoint, String queryParams) {
         try {
             URI uri = new URIBuilder(baseUrl + endpoint)
@@ -192,7 +196,6 @@ public class AsterClient {
     /**
      * Leverage
      */
-
     public boolean setLeverage(String symbol, int leverage) {
         StringBuilder params = new StringBuilder();
         params.append("symbol=").append(symbol);
@@ -653,6 +656,40 @@ public class AsterClient {
      * OrderBook
      */
 
+//    public PremiumIndexResponse getPremiumIndexInfo(String symbol) {
+//        try {
+//            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/premiumIndex");
+//            builder.addParameter("symbol", symbol);
+//            URI uri = builder.build();
+//
+//            HttpGet get = new HttpGet(uri);
+//            log.info("[Aster] GET premium index info for {}", symbol);
+//
+//            try (CloseableHttpResponse resp = httpClient.execute(get)) {
+//                int code = resp.getCode();
+//                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+//
+//                if (code != 200) {
+//                    log.error("[Aster] Premium index failed: code={}, body={}", code, body);
+//                    return null;
+//                }
+//
+//                PremiumIndexResponse response = objectMapper.readValue(body, PremiumIndexResponse.class);
+//
+//                log.info("[Aster] Premium index for {}: fundingRate={}%, nextFunding in {} min, markPrice={}",
+//                        symbol,
+//                        response.getLastFundingRateAsDouble() * 100,
+//                        response.getMinutesUntilFunding(),
+//                        response.getMarkPrice());
+//
+//                return response;
+//            }
+//        } catch (Exception e) {
+//            log.error("[Aster] Error getting premium index for {}", symbol, e);
+//            return null;
+//        }
+//    }
+
     public PremiumIndexResponse getPremiumIndexInfo(String symbol) {
         try {
             URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/premiumIndex");
@@ -681,9 +718,11 @@ public class AsterClient {
 
                 return response;
             }
+        } catch (AsterApiException e) {
+            throw e;
         } catch (Exception e) {
-            log.error("[Aster] Error getting premium index for {}", symbol, e);
-            return null;
+            log.error("[AsterClient] Еrror getting premium index for {}", symbol, e);
+            throw new AsterApiException(0, null, "Error: " + e.getMessage(), null);
         }
     }
 
@@ -1173,4 +1212,57 @@ public class AsterClient {
         }
     }
 
+    /**
+     * Exceptions
+     */
+    private String validateResponse(CloseableHttpResponse resp) throws IOException, ParseException {
+        int status = resp.getCode();
+        String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+
+        if (status >= 200 && status < 300) {
+            return body;
+        }
+
+        AsterErrorResponse error = tryParseAsterError(body);
+
+        if (status == 429) {
+            throw new AsterRateLimitException(status, Objects.nonNull(error) ? error.getCode() : null,
+                    Objects.nonNull(error) ? error.getMsg() : "Rate limit exceeded", body);
+        }
+
+        if (status == 418) {
+            throw new AsterIpBanException(status, Objects.nonNull(error) ? error.getCode() : null,
+                    Objects.nonNull(error) ? error.getMsg() : "IP banned", body);
+        }
+
+        if (status == 503) {
+            throw new AsterUnknownExecutionException(status, Objects.nonNull(error) ? error.getCode() : null,
+                    Objects.nonNull(error) ? error.getMsg() : "Execution status unknown", body);
+        }
+
+        if (status >= 400 && status < 500) {
+            throw new AsterApiException(status, Objects.nonNull(error) ? error.getCode() : null,
+                    Objects.nonNull(error) ? error.getMsg() : "Client error", body);
+        }
+
+        if (status >= 500) {
+            throw new AsterApiException(status, Objects.nonNull(error) ? error.getCode() : null,
+                    Objects.nonNull(error) ? error.getMsg() : "Server error", body);
+        }
+
+        throw new AsterApiException(status, Objects.nonNull(error) ? error.getCode() : null,
+                Objects.nonNull(error) ? error.getMsg() : "Unexpected HTTP status", body);
+    }
+
+    private AsterErrorResponse tryParseAsterError(String body) {
+        if (body == null || body.isBlank()) {
+            return null;
+        }
+
+        try {
+            return objectMapper.readValue(body, AsterErrorResponse.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
 }

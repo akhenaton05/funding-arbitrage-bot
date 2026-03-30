@@ -1559,45 +1559,6 @@ public class ExchangesService {
         return balances;
     }
 
-//    private boolean shouldCloseSmart(FundingCloseSignal pos, double currentSpread, ArbitrageRates currentRate) {
-//        //Checking directions flip
-//        if (!pos.getAction().equalsIgnoreCase(currentRate.getAction())) {
-//            String message = "[FundingBot] Funding rate flipped! Spread: " + currentSpread;
-//            log.info(message);
-//            PositionPnLData pnLData = positionDataMap.get(pos.getId());
-//
-//            eventPublisher.publishEvent(PositionUpdateEvent.builder()
-//                    .message("Funding Rate flipped! Spread: " + currentSpread)
-//                    .pnlData(pnLData)
-//                    .positionId(pos.getId())
-//                    .mode(pos.getMode().toString())
-//                    .ticker(pos.getTicker())
-//                    .build()
-//            );
-//        }
-//
-//        //Min rate allowed
-//        double threshold = fundingConfig.getSmart().getCloseThreshold();
-//
-//        if (currentSpread <= threshold) {
-//            String message = "[FundingBot] Spread is low:" + currentSpread;
-//            log.info("[FundingBot] Bad spread: {} <= {}, streak={}",
-//                    currentSpread, threshold, pos.getBadStreak());
-//            PositionPnLData pnLData = positionDataMap.get(pos.getId());
-//
-//            eventPublisher.publishEvent(PositionUpdateEvent.builder()
-//                    .message("Spread is low:" + currentSpread)
-//                    .pnlData(pnLData)
-//                    .positionId(pos.getId())
-//                    .mode(pos.getMode().toString())
-//                    .ticker(pos.getTicker())
-//                    .build()
-//            );
-//        }
-//
-//        return false;
-//    }
-
     private boolean shouldCloseSmart(FundingCloseSignal pos, double currentSpread, ArbitrageRates currentRate) {
 
         boolean rateFlipped = isRateFlipped(pos, currentRate);

@@ -249,7 +249,6 @@ public class ExchangesService {
     /**
      * Main logic
      */
-
     public String openPositionWithEqualSize(FundingOpenSignal signal) {
         //Creating exchanges
         Exchange exchangeOne = exchangeFactory.getExchange(signal.getFirstPosition().getExchange());
@@ -258,16 +257,13 @@ public class ExchangesService {
         Balance exchangesBalances = validateBalance(exchangeOne, exchangeTwo);
         double marginBalance = exchangesBalances.getMargin();
 
-        //Validating data for opening position(for Aster only)
-        if (exchangeOne.getType().equals(ExchangeType.ASTER) || exchangeTwo.getType().equals(ExchangeType.ASTER)) {
-            Exchange ast = exchangeOne.getType().equals(ExchangeType.ASTER) ? exchangeOne : exchangeTwo;
-            if (!validateFundingTime(signal, ast)) {
-                String errorMsg = "[FundingBot] More than an hour until funding, position not opened";
-                log.info("[FundingBot] More than an hour until funding, position not opened");
+        //Validating funding time - both ex has to be < 60 mins until payment
+        if (!validateFundingTime(signal, exchangeOne, exchangeTwo)) {
+            String errorMsg = "[FundingBot] More than an hour until funding, position not opened";
+            log.info("[FundingBot] More than an hour until funding, position not opened");
 
-                publishFailureEvent("E-0000", signal, errorMsg, marginBalance, false);
-                return errorMsg;
-            }
+            publishFailureEvent("E-0000", signal, errorMsg, marginBalance, false);
+            return errorMsg;
         }
 
         if (marginBalance <= 10) {
@@ -580,17 +576,45 @@ public class ExchangesService {
                 "Size: " + String.format("%.4f", finalTargetSize) + " " + ticker + " | " +
                 "Mode: " + mode;
 
-        eventPublisher.publishEvent(new PositionOpenedEvent(
-                positionId,
-                signal.getTicker(),
-                successMsg,
-                marginBalance,
-                signal.getFirstPosition().getDirection().toString(),
-                signal.getSecondPosition().getDirection().toString(),
-                mode.equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
-                true,
-                signal.getRate()
-        ));
+        PositionPnLData data = positionDataMap.get(positionId);
+
+        double price1 = data.getFirstOpenPrice();
+        double price2 = data.getSecondOpenPrice();
+
+        double spreadPct = Math.abs(price1 - price2) / Math.min(price1, price2) * 100;
+
+        String openInfo = String.format(
+                "%s price=%.6f / %s price=%.6f | Spread: %.4f%%",
+                signal.getFirstPosition().getExchange().getDisplayName(), price1,
+                signal.getSecondPosition().getExchange().getDisplayName(), price2,
+                spreadPct
+        );
+
+        eventPublisher.publishEvent(PositionOpenedEvent.builder()
+                .positionId(positionId)
+                .ticker(signal.getTicker())
+                .result(successMsg)
+                .openInfo(openInfo)
+                .balanceUsed(marginBalance)
+                .firstDirection(signal.getFirstPosition().getDirection().toString())
+                .secondDirection(signal.getSecondPosition().getDirection().toString())
+                .mode(mode.equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode")
+                .success(true)
+                .rate(signal.getRate())
+        );
+
+
+//        eventPublisher.publishEvent(new PositionOpenedEvent(
+//                positionId,
+//                signal.getTicker(),
+//                successMsg,
+//                marginBalance,
+//                signal.getFirstPosition().getDirection().toString(),
+//                signal.getSecondPosition().getDirection().toString(),
+//                mode.equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
+//                true,
+//                signal.getRate()
+//        ));
 
         log.info(successMsg);
         return successMsg;
@@ -752,15 +776,19 @@ public class ExchangesService {
                 .build();
     }
 
-    private boolean validateFundingTime(FundingOpenSignal signal, Exchange ex) {
-        long minutesUntilFunding = ex.getMinutesUntilFunding(signal.getTicker());
-        //If Funding is more than 60 min - not opening position
-        if (minutesUntilFunding > 60) {
-            log.info("[FundingBot] Funding too far: {} minutes, skipping signal", minutesUntilFunding);
+    private boolean validateFundingTime(FundingOpenSignal signal, Exchange ex1, Exchange ex2) {
+        boolean ex1Valid = ex1.isFundingTimeValid(signal.getTicker());
+        boolean ex2Valid = ex2.isFundingTimeValid(signal.getTicker());
+
+        if (!ex1Valid || !ex2Valid) {
+            Exchange failed = !ex1Valid ? ex1 : ex2;
+            long minutes = failed.getMinutesUntilFunding(signal.getTicker());
+            log.info("[FundingBot] Funding too far on {}: {} minutes, skipping signal",
+                    failed.getName(), minutes);
             return false;
         }
 
-        log.info("[FundingBot] Funding validated correctly, in less than {} min.", minutesUntilFunding);
+        log.info("[FundingBot] Funding validated correctly.");
         return true;
     }
 
@@ -1021,166 +1049,6 @@ public class ExchangesService {
 
         return false;
     }
-
-//    private void validatePositionRisk(FundingCloseSignal signal) {
-//        PositionPnLData pnlData = positionDataMap.get(signal.getId());
-//
-//        double warnThr = fundingConfig.getLiquidation().getWarn();
-//        double critThr = fundingConfig.getLiquidation().getCritical();
-//
-//        try {
-//            PositionRiskControl firstRisk = signal.getFirstExchange()
-//                    .validatePositionRisk(signal.getTicker(), signal.getFirstPosition().getDirection());
-//
-//            if (firstRisk == null || firstRisk.getLiquidationPrice() <= 0 || firstRisk.getMarkPrice() <= 0) {
-//                log.debug("[FundingBot] {} Skipping risk check for {} — liq={} mark={}",
-//                        signal.getFirstExchange().getName(),
-//                        signal.getTicker(),
-//                        firstRisk != null ? firstRisk.getLiquidationPrice() : "null",
-//                        firstRisk != null ? firstRisk.getMarkPrice() : "null");
-//            } else {
-//                double liq = firstRisk.getLiquidationPrice();
-//                double mark = firstRisk.getMarkPrice();
-//                double distancePct = Math.abs(mark - liq) / mark * 100.0;
-//
-//                log.info("[FundingBot] {} {} liq risk: mark={}, liq={}, distance={}%",
-//                        signal.getFirstExchange().getName(),
-//                        signal.getTicker(),
-//                        String.format("%.6f", mark),
-//                        String.format("%.6f", liq),
-//                        String.format("%.2f", distancePct));
-//
-//                if (distancePct <= warnThr) {
-//                    String level = distancePct <= critThr ? "Critical" : "Warning";
-//                    String msg = String.format(
-//                            "%s: Liquidation risk on %s $%s: %.2f%% to liq (mark=%.6f, liq=%.6f)",
-//                            level, signal.getFirstExchange().getName(), signal.getTicker(), distancePct, mark, liq
-//                    );
-//                    eventPublisher.publishEvent(PositionUpdateEvent.builder()
-//                            .message(msg)
-//                            .pnlData(pnlData)
-//                            .positionId(signal.getId())
-//                            .mode(signal.getMode().toString())
-//                            .ticker(signal.getTicker())
-//                            .build()
-//                    );
-//                    log.warn("[FundingBot] {}", msg);
-//                }
-//            }
-//        } catch (Exception e) {
-//            log.error("[FundingBot] {} Error getting risk data for {}: {}",
-//                    signal.getFirstExchange().getName(),
-//                    signal.getTicker(), e.getMessage());
-//        }
-//
-//        try {
-//            PositionRiskControl secondRisk = signal.getSecondExchange()
-//                    .validatePositionRisk(signal.getTicker(), signal.getSecondPosition().getDirection());
-//
-//            if (secondRisk == null || secondRisk.getLiquidationPrice() <= 0 || secondRisk.getMarkPrice() <= 0) {
-//                log.debug("[FundingBot] {} Skipping risk check for {} — liq={} mark={}",
-//                        signal.getSecondExchange().getName(),
-//                        signal.getTicker(),
-//                        secondRisk != null ? secondRisk.getLiquidationPrice() : "null",
-//                        secondRisk != null ? secondRisk.getMarkPrice() : "null");
-//            } else {
-//                double liq = secondRisk.getLiquidationPrice();
-//                double mark = secondRisk.getMarkPrice();
-//                double distancePct = Math.abs(mark - liq) / mark * 100.0;
-//
-//                log.info("[FundingBot] {} {} liq risk: mark={}, liq={}, distance={}%",
-//                        signal.getSecondExchange().getName(),
-//                        signal.getTicker(),
-//                        String.format("%.6f", mark),
-//                        String.format("%.6f", liq),
-//                        String.format("%.2f", distancePct));
-//
-//                if (distancePct <= warnThr) {
-//                    String level = distancePct <= critThr ? "Critical" : "Warning";
-//                    String msg = String.format(
-//                            "%s: Liquidation risk on %s $%s: %.2f%% to liq (mark=%.6f, liq=%.6f)",
-//                            level, signal.getSecondExchange().getName(), signal.getTicker(), distancePct, mark, liq
-//                    );
-//                    eventPublisher.publishEvent(PositionUpdateEvent.builder()
-//                            .message(msg)
-//                            .pnlData(pnlData)
-//                            .positionId(signal.getId())
-//                            .mode(signal.getMode().toString())
-//                            .ticker(signal.getTicker())
-//                            .build()
-//                    );
-//                    log.warn("[FundingBot] {}", msg);
-//                }
-//            }
-//        } catch (Exception e) {
-//            log.error("[FundingBot] {} Error getting risk data for {}: {}",
-//                    signal.getSecondExchange().getName(), signal.getTicker(), e.getMessage());
-//        }
-//    }
-
-//    private void validatePositionRisk(FundingCloseSignal signal) {
-//        PositionPnLData pnlData = positionDataMap.get(signal.getId());
-//        double warnThr = fundingConfig.getLiquidation().getWarn();
-//        double critThr = fundingConfig.getLiquidation().getCritical();
-//
-//        checkExchangeRisk(signal.getFirstExchange(), signal.getTicker(),
-//                signal.getFirstPosition().getDirection(), pnlData, signal, warnThr, critThr);
-//        checkExchangeRisk(signal.getSecondExchange(), signal.getTicker(),
-//                signal.getSecondPosition().getDirection(), pnlData, signal, warnThr, critThr);
-//    }
-//
-//    private void checkExchangeRisk(Exchange exchange, String ticker, Direction direction,
-//                                   PositionPnLData pnlData, FundingCloseSignal signal,
-//                                   double warnThr, double critThr) {
-//        try {
-//            PositionRiskControl risk = exchange.validatePositionRisk(ticker, direction);
-//
-//            if (risk == null || risk.getLiquidationPrice() <= 0) {
-//                log.debug("[FundingBot] {} Skipping risk check for {} — liq={}",
-//                        exchange.getName(), ticker,
-//                        risk != null ? risk.getLiquidationPrice() : "null");
-//                return;
-//            }
-//
-//            double liq = risk.getLiquidationPrice();
-//            double mark = risk.getMarkPrice();
-//            double entry = risk.getEntryPrice(); // используем entry price
-//
-//            // Основная метрика: дистанция от текущей mark до ликвидации
-//            double distanceFromMark = Math.abs(mark - liq) / mark * 100.0;
-//            // Дополнительно: насколько далеко ликвидация от точки входа (статичный показатель)
-//            double distanceFromEntry = entry > 0 ? Math.abs(entry - liq) / entry * 100.0 : -1;
-//
-//            log.info("[FundingBot] {} {} liq risk: entry={}, mark={}, liq={}, distMark={}%, distEntry={}%",
-//                    exchange.getName(), ticker,
-//                    String.format("%.6f", entry),
-//                    String.format("%.6f", mark),
-//                    String.format("%.6f", liq),
-//                    String.format("%.2f", distanceFromMark),
-//                    distanceFromEntry > 0 ? String.format("%.2f", distanceFromEntry) : "n/a");
-//
-//            if (distanceFromMark <= warnThr) {
-//                String level = distanceFromMark <= critThr ? "Critical" : "Warning";
-//                String msg = String.format(
-//                        "%s: Liquidation risk on %s $%s: %.2f%% to liq (mark=%.6f, liq=%.6f, entry=%.6f)",
-//                        level, exchange.getName(), ticker, distanceFromMark, mark, liq, entry
-//                );
-//                eventPublisher.publishEvent(PositionUpdateEvent.builder()
-//                        .message(msg)
-//                        .pnlData(pnlData)
-//                        .positionId(signal.getId())
-//                        .mode(signal.getMode().toString())
-//                        .ticker(ticker)
-//                        .build()
-//                );
-//                log.warn("[FundingBot] {}", msg);
-//            }
-//
-//        } catch (Exception e) {
-//            log.error("[FundingBot] {} Error getting risk data for {}: {}",
-//                    exchange.getName(), ticker, e.getMessage());
-//        }
-//    }
 
     private void validatePositionRisk(FundingCloseSignal signal) {
         PositionPnLData pnlData = positionDataMap.get(signal.getId());
@@ -1498,23 +1366,35 @@ public class ExchangesService {
 
     //Events
     private void publishFailureEvent(String positionId, FundingOpenSignal signal, String errorMsg, double balance, boolean success) {
-        eventPublisher.publishEvent(new PositionOpenedEvent(
-                positionId,
-                signal.getTicker(),
-                errorMsg,
-                balance,
-                signal.getFirstPosition().getDirection().toString(),
-                signal.getSecondPosition().getDirection().toString(),
-                signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
-                success,
-                signal.getRate()
-        ));
+        eventPublisher.publishEvent(PositionOpenedEvent.builder()
+                .positionId(positionId)
+                .ticker(signal.getTicker())
+                .result(errorMsg)
+                .openInfo("No info")
+                .balanceUsed(balance)
+                .firstDirection(signal.getFirstPosition().getDirection().toString())
+                .secondDirection(signal.getSecondPosition().getDirection().toString())
+                .mode(signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode")
+                .success(true)
+                .rate(signal.getRate())
+        );
+
+//        eventPublisher.publishEvent(new PositionOpenedEvent(
+//                positionId,
+//                signal.getTicker(),
+//                errorMsg,
+//                balance,
+//                signal.getFirstPosition().getDirection().toString(),
+//                signal.getSecondPosition().getDirection().toString(),
+//                signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
+//                success,
+//                signal.getRate()
+//        ));
     }
 
     /**
      * Utils
      */
-
     private ArbitrageRates getCurrentSpread(String ticker) {
         try {
             List<ArbitrageRates> rates = fundingArbitrageService.calculateArbitrageRates();

@@ -203,4 +203,10 @@ public class Lighter implements Exchange {
                 .markPrice(markPrice)
                 .build();
     }
+
+    //All Lighter funding has 1hr interval
+    @Override
+    public boolean isFundingTimeValid(String ticker) {
+        return true;
+    }
 }

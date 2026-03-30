@@ -1,20 +1,25 @@
 package ru.dto.exchanges;
 
+import lombok.Builder;
 import lombok.Getter;
 import lombok.AllArgsConstructor;
+import lombok.NoArgsConstructor;
 
 import java.util.UUID;
 
 @Getter
+@Builder
 @AllArgsConstructor
+@NoArgsConstructor
 public class PositionOpenedEvent {
-    private final String positionId;
-    private final String ticker;
-    private final String result;
-    private final double balanceUsed;
-    private final String extDirection;
-    private final String astDirection;
-    private final String mode;
+    private String positionId;
+    private String ticker;
+    private String result;
+    private String openInfo;
+    private double balanceUsed;
+    private String firstDirection;
+    private String secondDirection;
+    private String mode;
     private boolean success;
     private double rate;
 }

@@ -329,4 +329,10 @@ public class Extended implements Exchange {
                 .markPrice(positions.getFirst().getMarkPrice())
                 .build();
     }
+
+    //All Extended tickers has 1hr funding
+    @Override
+    public boolean isFundingTimeValid(String ticker) {
+        return true;
+    }
 }

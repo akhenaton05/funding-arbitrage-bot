@@ -591,9 +591,10 @@ public class ExchangesService {
                 .mode(mode.equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode")
                 .success(true)
                 .rate(signal.getRate())
+                .build()
         );
 
-
+//
 //        eventPublisher.publishEvent(new PositionOpenedEvent(
 //                positionId,
 //                signal.getTicker(),
@@ -1372,8 +1373,9 @@ public class ExchangesService {
                 .firstDirection(signal.getFirstPosition().getDirection().toString())
                 .secondDirection(signal.getSecondPosition().getDirection().toString())
                 .mode(signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode")
-                .success(true)
+                .success(false)
                 .rate(signal.getRate())
+                .build()
         );
     }
 

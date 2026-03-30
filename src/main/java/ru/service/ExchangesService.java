@@ -286,19 +286,8 @@ public class ExchangesService {
 
         int leverage = signal.getLeverage();
 
-        //Max leverage for ticker validation for Aster leverage
-        if (exchangeOne.getType().equals(ExchangeType.ASTER) || exchangeTwo.getType().equals(ExchangeType.ASTER)) {
-            Exchange ast = exchangeOne.getType().equals(ExchangeType.ASTER) ? exchangeOne : exchangeTwo;
-            leverage = validateLeverage(signal.getTicker(), ast, leverage);
-        }
-
-        //Max leverage for ticker validation for Lighter leverage
-        if (exchangeOne.getType().equals(ExchangeType.LIGHTER) || exchangeTwo.getType().equals(ExchangeType.LIGHTER)) {
-            Exchange lighter = exchangeOne.getType().equals(ExchangeType.LIGHTER) ? exchangeOne : exchangeTwo;
-            int lighterMaxLeverage = lighter.getMaxLeverage(signal.getTicker(), leverage);
-            leverage = Math.min(leverage, lighterMaxLeverage);
-            log.info("[FundingBot] Lighter max leverage for {}: {}x", signal.getTicker(), lighterMaxLeverage);
-        }
+        leverage = Math.min(leverage, validateLeverage(signal.getTicker(), exchangeOne, exchangeTwo, leverage));
+        log.info("[FundingBot] Min leverage for {}: {}", signal.getTicker(), leverage);
 
         balanceMap.put(positionId, positionBalance);
 
@@ -355,7 +344,7 @@ public class ExchangesService {
         String firstOrderId;
         String secondOrderId;
 
-        //Parallel opening
+        //Create order
         CompletableFuture<String> firstFuture = CompletableFuture.supplyAsync(() -> {
             try {
                 log.info("[FundingBot] {} opening {} {} @ {}x with size {}",
@@ -416,6 +405,7 @@ public class ExchangesService {
             }
         });
 
+        //Executing open positions
         try {
             log.info("[FundingBot] Opening both positions");
 
@@ -790,6 +780,13 @@ public class ExchangesService {
 
         log.info("[FundingBot] Funding validated correctly.");
         return true;
+    }
+
+    public int validateLeverage(String symbol, Exchange ex1, Exchange ex2, int leverage) {
+        int firstLev = ex1.getMaxLeverage(symbol, leverage);
+        int secondLev = ex2.getMaxLeverage(symbol, leverage);
+
+        return Math.min(firstLev, secondLev);
     }
 
     public int validateLeverage(String symbol, Exchange ex, int leverage) {
@@ -1378,18 +1375,6 @@ public class ExchangesService {
                 .success(true)
                 .rate(signal.getRate())
         );
-
-//        eventPublisher.publishEvent(new PositionOpenedEvent(
-//                positionId,
-//                signal.getTicker(),
-//                errorMsg,
-//                balance,
-//                signal.getFirstPosition().getDirection().toString(),
-//                signal.getSecondPosition().getDirection().toString(),
-//                signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode",
-//                success,
-//                signal.getRate()
-//        ));
     }
 
     /**

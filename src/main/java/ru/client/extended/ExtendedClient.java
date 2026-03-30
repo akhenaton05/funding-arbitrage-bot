@@ -270,72 +270,6 @@ public class ExtendedClient {
         }
     }
 
-//    public String openPositionWithSize(String market, double size, String direction) {
-//        String side = direction.equalsIgnoreCase("LONG") ? "BUY" : "SELL";
-//
-//        try {
-//            log.info("[Extended] Opening position by size: market={}, size={}, direction={}",
-//                    market, String.format("%.4f", size), direction);
-//
-//            if (size <= 0) {
-//                log.error("[Extended] Invalid size: {}", size);
-//                return null;
-//            }
-//
-//            double stepSize = getStepSize(market);
-//            double roundedSize = roundToStepSize(size, stepSize);
-//
-//            // ✅ ИСПРАВЛЕНИЕ: берём цену из стакана, а не mark price
-//            ExtendedOrderBook orderBook = getOrderBook(market);
-//            double referencePrice;
-//            if (orderBook != null) {
-//                boolean isBuy = direction.equalsIgnoreCase("LONG");
-//                List<OrderBookLevel> levels = isBuy ? orderBook.getAsk() : orderBook.getBid();
-//                if (levels != null && !levels.isEmpty()) {
-//                    referencePrice = Double.parseDouble(levels.get(0).getPrice());
-//                    log.info("[Extended] Using orderbook {} price for {}: ${}",
-//                            isBuy ? "ask" : "bid", market, referencePrice);
-//                } else {
-//                    referencePrice = getMarkPrice(market);
-//                    log.warn("[Extended] Orderbook empty, fallback to mark price: ${}", referencePrice);
-//                }
-//            } else {
-//                referencePrice = getMarkPrice(market);
-//                log.warn("[Extended] Orderbook unavailable, fallback to mark price: ${}", referencePrice);
-//            }
-//
-//            if (referencePrice <= 0) {
-//                log.error("[Extended] Failed to get price for {}", market);
-//                return null;
-//            }
-//
-//            double notional = roundedSize * referencePrice;
-//            log.info("[Extended] Position params: size={}, price=${}, notional=${}, step_size={}",
-//                    String.format("%.4f", roundedSize),
-//                    String.format("%.6f", referencePrice),
-//                    String.format("%.2f", notional),
-//                    stepSize);
-//
-//            String externalId = openMarketPosition(market, side, roundedSize, 2.0);
-//
-//            if (externalId == null) {
-//                log.error("[Extended] Failed to open position with size {}", roundedSize);
-//                return null;
-//            }
-//
-//            log.info("[Extended] Position opened: external_id={}, size={} {}",
-//                    externalId,
-//                    String.format("%.4f", roundedSize),
-//                    market.split("-")[0]);
-//
-//            return externalId;
-//
-//        } catch (Exception e) {
-//            log.error("[Extended] Error opening position by size for {}", market, e);
-//            return null;
-//        }
-//    }
-
     public String openPositionWithFixedMargin(String symbol, double marginUsd, int leverage, String direction) {
         String side = direction.equalsIgnoreCase("LONG") ? "BUY" : "SELL";
 
@@ -747,6 +681,7 @@ public class ExtendedClient {
                     .build();
 
             HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            log.info("Response: {}" + response.body());
 
             if (response.statusCode() != 200) {
                 log.error("[Extended] Market stats failed: code={}, body={}",
@@ -780,6 +715,42 @@ public class ExtendedClient {
         } catch (Exception e) {
             log.error("[Extended] Error getting market stats for {}", market, e);
             return null;
+        }
+    }
+
+    public int getMaxLeverage(String market) {
+        try {
+            String url = baseUrl + "/api/v1/info/markets?market=" + market;
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                log.warn("Extended Failed to get market info for {}, HTTP {}", market, response.statusCode());
+                return 20;
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> result = objectMapper.readValue(response.body(), Map.class);
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> dataList = (List<Map<String, Object>>) result.get("data");
+            if (dataList == null || dataList.isEmpty()) return 20;
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> tradingConfig = (Map<String, Object>) dataList.get(0).get("tradingConfig");
+            if (tradingConfig == null) return 20;
+
+            int maxLeverage = (int) Double.parseDouble(tradingConfig.get("maxLeverage").toString());
+            log.info("Extended Max leverage for {} {}x", market, maxLeverage);
+            return maxLeverage;
+
+        } catch (Exception e) {
+            log.error("Extended Error getting max leverage for {}", market, e);
+            return 20;
         }
     }
 

@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.*;
 import ru.client.aster.AsterClient;
 import ru.client.extended.ExtendedClient;
 import ru.dto.exchanges.aster.AsterTrade;
+import ru.dto.exchanges.extended.ExtendedMarketStats;
 import ru.dto.exchanges.extended.ExtendedPositionHistory;
 
 import java.time.Instant;
@@ -36,6 +37,15 @@ public class ExchangeTestController {
         System.out.println(pnl);
 
         return pnl;
+    }
+
+    // GET /test/extended/position/history?market=4-USD&side=LONG
+    @GetMapping("/extended/market")
+    public ResponseEntity<?> testMaxLeverage(@RequestParam(value = "market") String market) {
+//        ExtendedMarketStats stats = extendedClient.getMarketStats(market);
+        extendedClient.getMaxLeverage(market);
+
+        return ResponseEntity.ok("OK");
     }
 
     // GET /test/extended/position/history?market=4-USD&side=LONG

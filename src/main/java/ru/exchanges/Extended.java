@@ -183,7 +183,7 @@ public class Extended implements Exchange {
 
     @Override
     public int getMaxLeverage(String symbol, int leverage) {
-        return 0;
+        return extendedClient.getMaxLeverage(formatSymbol(symbol));
     }
 
     @Override

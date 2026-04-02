@@ -1,11 +1,11 @@
 package ru.service;
 
-import lombok.AllArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.telegram.telegrambots.bots.DefaultBotOptions;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.ActionType;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
@@ -19,6 +19,7 @@ import ru.config.*;
 import ru.dto.db.dto.TickerStats;
 import ru.dto.db.dto.TradeHistory;
 import ru.dto.db.model.Period;
+import ru.dto.exchanges.Direction;
 import ru.dto.funding.FundingCloseSignal;
 import ru.dto.exchanges.PositionBalance;
 import ru.dto.exchanges.PositionClosedEvent;
@@ -41,7 +42,6 @@ import java.util.Map;
 
 @Slf4j
 @Service
-@AllArgsConstructor
 public class TelegramChatService extends TelegramLongPollingBot {
 
     private final TelegramBotConfig telegramBotConfig;
@@ -49,6 +49,20 @@ public class TelegramChatService extends TelegramLongPollingBot {
     private final FundingArbitrageService fundingService;
     private final ExchangesService exchangesService;
     private final TradeHistoryService tradeHistoryService;
+
+    public TelegramChatService(TelegramBotConfig telegramBotConfig,
+                               FundingArbitrageContext fundingContext,
+                               FundingArbitrageService fundingService,
+                               ExchangesService exchangesService,
+                               TradeHistoryService tradeHistoryService,
+                               DefaultBotOptions botOption) {
+        super(botOption);
+        this.telegramBotConfig = telegramBotConfig;
+        this.fundingContext = fundingContext;
+        this.fundingService = fundingService;
+        this.exchangesService = exchangesService;
+        this.tradeHistoryService = tradeHistoryService;
+    }
 
     @Override
     public String getBotUsername() {
@@ -126,13 +140,15 @@ public class TelegramChatService extends TelegramLongPollingBot {
                     .limit(10)
                     .forEach(opp -> {
                         String oi = opp.getOiRank() != null ? "#" + String.format("%-3d", opp.getOiRank()) : "-  ";
+                        String firstDir = opp.getFirstDirection().equals(Direction.LONG) ? "(L)" : "(S)";
+                        String secondDir = opp.getSecondDirection().equals(Direction.LONG) ? "(L)" : "(S)";
                         result.append(String.format(
                                 "%-7s | %s | %6.2f%% | %s/%s\n",
                                 opp.getSymbol(),
                                 oi,
                                 opp.getArbitrageRate(),
-                                opp.getFirstExchange().getDisplayName(),
-                                opp.getSecondExchange().getDisplayName()
+                                opp.getFirstExchange().getDisplayName() + firstDir,
+                                opp.getSecondExchange().getDisplayName() + secondDir
                         ));
                     });
 
@@ -325,38 +341,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         sendMessage(chatId, message);
     }
-//
-//    private void getTradeHistory(Long chatId) {
-//        log.info("[Telegram] Trade history request from chat {}", chatId);
-//        sendTypingAction(chatId);
-//
-//        SendMessage message = new SendMessage();
-//        message.setChatId(chatId);
-//        message.setText("🤖 *FundingBot:* Choose period:");
-//        message.setParseMode("Markdown");
-//
-//        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
-//        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-//
-//        rows.add(createButtonRow(
-//                "📅 Today",  "history:DAY",
-//                "📅 Week", "history:WEEK"
-//        ));
-//        rows.add(createButtonRow(
-//                "📅 Month",  "history:MONTH",
-//                "📋 All",    "history:ALL"
-//        ));
-//
-//        markup.setKeyboard(rows);
-//        message.setReplyMarkup(markup);
-//
-//        try {
-//            execute(message);
-//        } catch (TelegramApiException e) {
-//            log.error("[Telegram] Failed to send history menu", e);
-//        }
-//    }
-
 
     public String formatBalanceMap(Map<String, PositionBalance> balanceMap,
                                    Map<String, FundingCloseSignal> openedPositions) {
@@ -522,7 +506,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
     private String formatAlert(ArbitrageRates rate) {
         return String.format("🚨 *High Arbitrage Alert* 🚨\n\n" +
                         "*Symbol: %s*\n" +
-                        "*Max Arb:* %.2f%%\n" +
+                        "*Funding Rate:* %.2f%%\n" +
                         "*%s:* %.2f%%\n" +
                         "*%s:* %.2f%%\n" +
                         "*Action:* %s",

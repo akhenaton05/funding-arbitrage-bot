@@ -124,7 +124,7 @@ public class ExchangesService {
                 continue;
             }
 
-            ArbitrageRates currentRate = getCurrentSpread(pos.getTicker());
+            ArbitrageRates currentRate = getCurrentSpread(pos);
 
             if (Objects.isNull(currentRate)) {
                 log.warn("[FundingBot] Current rate is null for {}, skipping", pos.getTicker());
@@ -567,6 +567,7 @@ public class ExchangesService {
                 "Mode: " + mode;
 
         PositionPnLData data = positionDataMap.get(positionId);
+        log.info("[TESTING] PositionData opening: {}", data);
 
         double price1 = data.getFirstOpenPrice();
         double price2 = data.getSecondOpenPrice();
@@ -574,11 +575,12 @@ public class ExchangesService {
         double spreadPct = Math.abs(price1 - price2) / Math.min(price1, price2) * 100;
 
         String openInfo = String.format(
-                "%s price=%.6f / %s price=%.6f | Spread: %.4f%%",
-                signal.getFirstPosition().getExchange().getDisplayName(), price1,
-                signal.getSecondPosition().getExchange().getDisplayName(), price2,
+                "%s price=%s / %s price=%s | Spread: %.4f%%",
+                signal.getFirstPosition().getExchange().getDisplayName(), formatPrice(price1),
+                signal.getSecondPosition().getExchange().getDisplayName(), formatPrice(price2),
                 spreadPct
         );
+        log.info("[FundingBot] openInfo: {}", openInfo);
 
         eventPublisher.publishEvent(PositionOpenedEvent.builder()
                 .positionId(positionId)
@@ -816,6 +818,7 @@ public class ExchangesService {
         } else {
             log.warn("[FundingBot] {} position not found", ex1.getName());
         }
+        log.info("[TESTING] First position found: {}", firstHasPosition);
 
         //Checking Second position
         List<Position> secondPositions = ex2.getPositions(signal.getTicker(), signal.getSecondPosition().getDirection());
@@ -828,6 +831,7 @@ public class ExchangesService {
         } else {
             log.warn("[FundingBot] {} position not found", ex2.getName());
         }
+        log.info("[TESTING] Second position found: {}", secondPositions);
 
         //Checking the results
         if (firstHasPosition && secondHasPosition) {
@@ -852,12 +856,16 @@ public class ExchangesService {
                     String.format("%.4f", secondData.getFee()),
                     String.format("%.4f", totalOpenFees));
 
+            log.info("[TESTING] Opening prices: {}. {}",firstPositions.getFirst().getEntryPrice(), secondPositions.getFirst().getEntryPrice());
+
             // Saving data
             PositionPnLData pnlData = PositionPnLData.builder()
                     .positionId(positionId)
                     .ticker(signal.getTicker())
                     .openTime(LocalDateTime.now(ZoneOffset.UTC))
                     .totalOpenFees(totalOpenFees)
+                    .firstOpenPrice(firstPositions.getFirst().getEntryPrice())
+                    .secondOpenPrice(secondPositions.getFirst().getEntryPrice())
                     .totalCloseFees(0.0)
                     .firstFundingNet(0.0)
                     .secondFundingNet(0.0)
@@ -1382,18 +1390,39 @@ public class ExchangesService {
     /**
      * Utils
      */
-    private ArbitrageRates getCurrentSpread(String ticker) {
+//    private ArbitrageRates getCurrentSpread(String ticker) {
+//        try {
+//            List<ArbitrageRates> rates = fundingArbitrageService.calculateArbitrageRates();
+//            for (ArbitrageRates rate : rates) {
+//                if (rate.getSymbol().equals(ticker)) {
+//                    return rate;
+//                }
+//            }
+//            log.warn("[FundingBot] Ticker {} not found in current rates", ticker);
+//            return null;
+//        } catch (Exception e) {
+//            log.error("[FundingBot] Failed to get spread for {}", ticker, e);
+//            return null;
+//        }
+//    }
+
+    private ArbitrageRates getCurrentSpread(FundingCloseSignal pos) {
         try {
             List<ArbitrageRates> rates = fundingArbitrageService.calculateArbitrageRates();
-            for (ArbitrageRates rate : rates) {
-                if (rate.getSymbol().equals(ticker)) {
-                    return rate;
-                }
-            }
-            log.warn("[FundingBot] Ticker {} not found in current rates", ticker);
-            return null;
+
+            ExchangeType ex1 = pos.getFirstExchange().getType();
+            ExchangeType ex2 = pos.getSecondExchange().getType();
+
+            return rates.stream()
+                    .filter(r -> r.getSymbol().equals(pos.getTicker()))
+                    .filter(r ->
+                            (r.getFirstExchange() == ex1 && r.getSecondExchange() == ex2) ||
+                                    (r.getFirstExchange() == ex2 && r.getSecondExchange() == ex1)
+                    )
+                    .findFirst()
+                    .orElse(null);
         } catch (Exception e) {
-            log.error("[FundingBot] Failed to get spread for {}", ticker, e);
+            log.error("[FundingBot] Failed to get spread for {}", pos.getTicker(), e);
             return null;
         }
     }
@@ -1770,6 +1799,13 @@ public class ExchangesService {
         }
     }
 
+    private String formatPrice(double price) {
+        if (price == 0) return "N/A";
+        if (price >= 1)    return String.format("%.4f", price);
+        if (price >= 0.01) return String.format("%.6f", price);
+        return String.format("%.8f", price);  // для очень маленьких токенов
+    }
+
     private boolean isPositionClosed(List<Position> positions) {
         if (positions == null || positions.isEmpty()) return true;
         Position pos = positions.getFirst();
@@ -1808,19 +1844,4 @@ public class ExchangesService {
         return false;
     }
 
-
-//    private boolean isPositionAlreadyOpen(FundingOpenSignal signal) {
-//        for (FundingCloseSignal opened : openedPositions.values()) {
-//            boolean sameTicker = opened.getTicker().equals(signal.getTicker());
-//            boolean sameExchanges = opened.getFirstExchange().getType() == signal.getFirstPosition().getExchange()
-//                            && opened.getSecondExchange().getType() == signal.getSecondPosition().getExchange()
-//                            || opened.getFirstExchange().getType() == signal.getSecondPosition().getExchange()
-//                            && opened.getSecondExchange().getType() == signal.getFirstPosition().getExchange();
-//
-//            if (sameTicker && sameExchanges) {
-//                return true;
-//            }
-//        }
-//        return false;
-//    }
 }

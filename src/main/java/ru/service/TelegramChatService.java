@@ -140,8 +140,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
                     .limit(10)
                     .forEach(opp -> {
                         String oi = opp.getOiRank() != null ? "#" + String.format("%-3d", opp.getOiRank()) : "-  ";
-                        String firstDir = opp.getFirstDirection().equals(Direction.LONG) ? "(L)" : "(S)";
-                        String secondDir = opp.getSecondDirection().equals(Direction.LONG) ? "(L)" : "(S)";
+                        String firstDir = opp.getFirstDirection().equals(Direction.LONG) ? "↑" : "↓";
+                        String secondDir = opp.getSecondDirection().equals(Direction.LONG) ? "↑" : "↓";
                         result.append(String.format(
                                 "%-7s | %s | %6.2f%% | %s/%s\n",
                                 opp.getSymbol(),
@@ -454,7 +454,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*Mode:* %s\n" +
                         "*Ticker:* %s\n" +
                         "*Margin Used:* %.2f USD\n" +
-                        "*Info:* %s\n" +
+                        "*Open:* %s\n" +
                         "*Funding Rate:* %.2f%%\n",
                 event.getPositionId(),
                 event.getMode(),
@@ -587,49 +587,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
                 pnl.getNetPnl()
         );
     }
-
-//    private String formatTradeHistory(Long chatId) {
-//        TradeHistory day   = tradeHistoryService.getStats(Period.DAY);
-//        TradeHistory week  = tradeHistoryService.getStats(Period.WEEK);
-//        TradeHistory month = tradeHistoryService.getStats(Period.MONTH);
-//        TradeHistory all   = tradeHistoryService.getStats(Period.ALL);
-//
-//        StringBuilder sb = new StringBuilder();
-//        sb.append("🤖 *FundingBot:* Trade History 📈\n");
-//        sb.append("━━━━━━━━━━━━━━━━━━\n\n");
-//
-//        sb.append(formatStatsPeriod("Today", day));
-//        sb.append(formatStatsPeriod("7 Days", week));
-//        sb.append(formatStatsPeriod("30 Days", month));
-//        sb.append(formatStatsPeriod("All Time", all));
-//
-//        return sb.toString();
-//    }
-//
-//    private String formatStatsPeriod(String label, TradeStats stats) {
-//        if (stats.getTotalTrades() == 0) {
-//            return String.format("📅 *%s:* _No trades_\n\n", label);
-//        }
-//
-//        String pnlEmoji = stats.getTotalPnl() >= 0 ? "\uD83D\uDCB0" : "\uD83E\uDDF1";
-//        String sign = stats.getTotalPnl() >= 0 ? "+" : "";
-//
-//        return String.format(
-//                "📅 *%s*\n" +
-//                        "%s *P&L:* %s$%.2f\n" +
-//                        "📊 *Win Rate:* %d/%d (%.1f%%)\n" +
-//                        "🏆 *Best:* +$%.2f  💀 *Worst:* $%.2f\n\n",
-//                label,
-//                pnlEmoji,
-//                sign,
-//                stats.getTotalPnl(),
-//                stats.getWins(),
-//                stats.getTotalTrades(),
-//                stats.getWinRate(),
-//                stats.getBestTrade(),
-//                stats.getWorstTrade()
-//        );
-//    }
 
     private List<InlineKeyboardButton> createButtonRow(String text1, String callback1, String text2, String callback2) {
         List<InlineKeyboardButton> row = new ArrayList<>();

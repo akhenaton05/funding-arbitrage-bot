@@ -655,41 +655,6 @@ public class AsterClient {
     /**
      * OrderBook
      */
-
-//    public PremiumIndexResponse getPremiumIndexInfo(String symbol) {
-//        try {
-//            URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/premiumIndex");
-//            builder.addParameter("symbol", symbol);
-//            URI uri = builder.build();
-//
-//            HttpGet get = new HttpGet(uri);
-//            log.info("[Aster] GET premium index info for {}", symbol);
-//
-//            try (CloseableHttpResponse resp = httpClient.execute(get)) {
-//                int code = resp.getCode();
-//                String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
-//
-//                if (code != 200) {
-//                    log.error("[Aster] Premium index failed: code={}, body={}", code, body);
-//                    return null;
-//                }
-//
-//                PremiumIndexResponse response = objectMapper.readValue(body, PremiumIndexResponse.class);
-//
-//                log.info("[Aster] Premium index for {}: fundingRate={}%, nextFunding in {} min, markPrice={}",
-//                        symbol,
-//                        response.getLastFundingRateAsDouble() * 100,
-//                        response.getMinutesUntilFunding(),
-//                        response.getMarkPrice());
-//
-//                return response;
-//            }
-//        } catch (Exception e) {
-//            log.error("[Aster] Error getting premium index for {}", symbol, e);
-//            return null;
-//        }
-//    }
-
     public PremiumIndexResponse getPremiumIndexInfo(String symbol) {
         try {
             URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/premiumIndex");

@@ -134,10 +134,11 @@ public class Extended implements Exchange {
             log.info("[ExtendedDex] Trade result for {}: {}", result.getOrderId(), positionResult);
 
             result.setRealizedPnl(
-                    Double.parseDouble(positionResult.getRealisedPnlBreakdown().getTradePnl())
-                            + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getCloseFees())
-                            + Double.parseDouble(positionResult.getRealisedPnlBreakdown().getOpenFees())
+                    positionResult.getRealisedPnlBreakdown().getTradePnl()
+                    + positionResult.getRealisedPnlBreakdown().getCloseFees()
+                    + positionResult.getRealisedPnlBreakdown().getOpenFees()
             );
+            result.setExitPrice(positionResult.getExitPrice());
 
             return result;
 

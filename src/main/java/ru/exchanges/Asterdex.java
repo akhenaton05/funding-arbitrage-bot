@@ -151,6 +151,7 @@ public class Asterdex implements Exchange {
             double totalFee = (Double.parseDouble(tradeResult.getCommission()) * 2.0);
 
             result.setRealizedPnl(Double.parseDouble(tradeResult.getRealizedPnl()) - totalFee);
+            result.setExitPrice(tradeResult.getPrice());
 
             return result;
 

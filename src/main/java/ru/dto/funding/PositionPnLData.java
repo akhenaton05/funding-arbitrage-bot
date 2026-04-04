@@ -11,6 +11,11 @@ public class PositionPnLData {
     private String positionId;
     private String ticker;
     private LocalDateTime openTime;
+    //New data
+    private double firstMarkPrice;
+    private double secondMarkPrice;
+    private double firstLiqPrice;
+    private double secondLiqPrice;
     private double firstOpenPrice;
     private double secondOpenPrice;
     private double totalOpenFees;

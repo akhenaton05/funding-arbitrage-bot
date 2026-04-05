@@ -632,12 +632,19 @@ async def get_positions():
                 else:
                     logger.info(f"   ⚠️ Filtered position with size=0: {symbol} {position_side}")
 
+            # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+            pos_value = float(getattr(pos, 'position_value', 0) or 0)
+            implied_mark = pos_value / position_size if position_size > 0 else 0.0
+            logger.info(f"   📊 Implied mark price for {symbol}: ${implied_mark:.6f} "
+                f"(pos_value={pos_value}, size={position_size})")
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
             formatted.append({
                 "market": symbol,
                 "side": position_side,
                 "size": str(position_size),
                 "open_price": str(getattr(pos, 'avg_entry_price', 0) or 0),
-                "mark_price": None,
+                "mark_price": str(round(implied_mark, 6)),
                 "position_value": str(getattr(pos, 'position_value', 0) or 0),
                 "unrealised_pnl": str(getattr(pos, 'unrealized_pnl', 0) or 0),
                 "realized_pnl": str(getattr(pos, 'realized_pnl', 0) or 0),

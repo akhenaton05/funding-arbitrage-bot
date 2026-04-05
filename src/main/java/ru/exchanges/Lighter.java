@@ -71,6 +71,8 @@ public class Lighter implements Exchange {
         for(LighterPosition pos : positions) {
             result.add(LighterPositionMapper.toPosition(pos));
         }
+        log.info("[LighterDex] LighterPosition: {}", positions);
+        log.info("[LighterDex] Position: {}", result);
         return result;
     }
 

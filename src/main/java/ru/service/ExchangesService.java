@@ -12,9 +12,7 @@ import ru.config.FundingConfig;
 import ru.dto.db.model.Trade;
 import ru.dto.exchanges.*;
 import ru.dto.funding.*;
-import ru.event.NewArbitrageEvent;
-import ru.event.PnLThresholdEvent;
-import ru.event.PositionUpdateEvent;
+import ru.event.*;
 import ru.exceptions.ClosingPositionException;
 import ru.exceptions.OpeningPositionException;
 import ru.exchanges.Exchange;
@@ -176,35 +174,35 @@ public class ExchangesService {
         log.info("[FundingBot] Aster funding prediction completed");
     }
 
-    @Scheduled(fixedDelay = 300000) //Every 5 min
-    public void updateOpenPositionsPnL() {
-        if (openedPositions.isEmpty()) {
-            return;
-        }
-
-        log.debug("[FundingBot] Updating P&L for {} open positions", openedPositions.size());
-
-        for (FundingCloseSignal signal : openedPositions.values()) {
-            if (closingInProgress.contains(signal.getId())) {
-                log.debug("[FundingBot] Skipping PnL update for {} - closing in progress", signal.getId());
-                continue;
-            }
-
-            try {
-                PositionPnLData pnlData = calculateCurrentPnL(signal);
-
-                if (pnlData == null) {
-                    continue;
-                }
-
-                checkPnLThreshold(signal, pnlData);
-
-            } catch (Exception e) {
-                log.error("[FundingBot] Failed to update P&L for {}: {}",
-                        signal.getId(), e.getMessage());
-            }
-        }
-    }
+//    @Scheduled(fixedDelay = 300000) //Every 5 min
+//    public void updateOpenPositionsPnL() {
+//        if (openedPositions.isEmpty()) {
+//            return;
+//        }
+//
+//        log.debug("[FundingBot] Updating P&L for {} open positions", openedPositions.size());
+//
+//        for (FundingCloseSignal signal : openedPositions.values()) {
+//            if (closingInProgress.contains(signal.getId())) {
+//                log.debug("[FundingBot] Skipping PnL update for {} - closing in progress", signal.getId());
+//                continue;
+//            }
+//
+//            try {
+//                PositionPnLData pnlData = calculateCurrentPnL(signal);
+//
+//                if (pnlData == null) {
+//                    continue;
+//                }
+//
+//                checkPnLThreshold(signal, pnlData);
+//
+//            } catch (Exception e) {
+//                log.error("[FundingBot] Failed to update P&L for {}: {}",
+//                        signal.getId(), e.getMessage());
+//            }
+//        }
+//    }
 
     @Scheduled(fixedDelay = 600000) //Every 10 min
     public void checkPositions() {
@@ -246,10 +244,57 @@ public class ExchangesService {
         }
     }
 
+    @Scheduled(fixedDelay = 100000)
+    public void dynamicUpdateOpenPositionsPnL() {
+        if (openedPositions.isEmpty()) return;
+
+        for (FundingCloseSignal signal : openedPositions.values()) {
+            if (closingInProgress.contains(signal.getId())) continue;
+
+            try {
+                PositionPnLData pnlData = calculateCurrentPnL(signal);
+                if (Objects.isNull(pnlData)) continue;
+
+                ArbitrageRates currentRate = getCurrentSpread(signal);
+                double currentFundingRate = Objects.nonNull(currentRate)
+                        ? currentRate.getArbitrageRate()
+                        : signal.getOpenedFundingRate();
+
+                eventPublisher.publishEvent(PositionLiveUpdateEvent.builder()
+                        .positionId(signal.getId())
+                        .balance(signal.getBalance())
+                        .ticker(signal.getTicker())
+                        .mode(signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode")
+                        .openFundingRate(signal.getOpenedFundingRate())
+                        .ex1Name(signal.getFirstExchange().getName())
+                        .ex2Name(signal.getSecondExchange().getName())
+                        .openedAtMs(signal.getOpenedAtMs())
+                        .currentFundingRate(currentFundingRate)
+                        .pnlData(pnlData)
+                        .firstDirection(signal.getFirstPosition().getDirection())
+                        .secondDirection(signal.getSecondPosition().getDirection())
+                        .build()
+                );
+
+            } catch (Exception e) {
+                log.error("[FundingBot] Failed to update PnL for {}", signal.getId(), e);
+            }
+        }
+    }
+
     /**
      * Main logic
      */
     public String openPositionWithEqualSize(FundingOpenSignal signal) {
+        String positionId = generatePositionId();
+
+        eventPublisher.publishEvent(PositionOpeningEvent.builder()
+                .positionId(positionId)
+                .ticker(signal.getTicker())
+                .fundingRate(signal.getRate())
+                .mode(signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode")
+                .build()
+        );
         //Creating exchanges
         Exchange exchangeOne = exchangeFactory.getExchange(signal.getFirstPosition().getExchange());
         Exchange exchangeTwo = exchangeFactory.getExchange(signal.getSecondPosition().getExchange());
@@ -263,6 +308,7 @@ public class ExchangesService {
             log.info("[FundingBot] More than an hour until funding, position not opened");
 
             publishFailureEvent("E-0000", signal, errorMsg, marginBalance, false);
+            rollbackPositionId();
             return errorMsg;
         }
 
@@ -271,10 +317,10 @@ public class ExchangesService {
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
 
             publishFailureEvent("E-0000", signal, errorMsg, marginBalance, false);
+            rollbackPositionId();
             return errorMsg;
         }
 
-        String positionId = generatePositionId();
         log.info("[FundingBot] Validations passed. Allocated position ID: {} for {}",
                 positionId, signal.getTicker());
 
@@ -567,20 +613,18 @@ public class ExchangesService {
                 "Mode: " + mode;
 
         PositionPnLData data = positionDataMap.get(positionId);
-        log.info("[TESTING] PositionData opening: {}", data);
 
-        double price1 = data.getFirstOpenPrice();
-        double price2 = data.getSecondOpenPrice();
+        double price1 = data.getFirstEntryPrice();
+        double price2 = data.getSecondEntryPrice();
 
         double spreadPct = Math.abs(price1 - price2) / Math.min(price1, price2) * 100;
 
         String openPrice = String.format(
-                "%s: %s | %s: %s | Spread: %.3f%%",
-                signal.getFirstPosition().getExchange().getDisplayName(), formatPrice(price1),
-                signal.getSecondPosition().getExchange().getDisplayName(), formatPrice(price2),
+                "%s: %s | %s: %s | Spread: %.2f%%",
+                ExchangeType.abbreviate(signal.getFirstPosition().getExchange().getDisplayName()), formatPrice(price1),
+                ExchangeType.abbreviate(signal.getSecondPosition().getExchange().getDisplayName()), formatPrice(price2),
                 spreadPct
         );
-        log.info("[FundingBot] openInfo: {}", openPrice);
 
         eventPublisher.publishEvent(PositionOpenedEvent.builder()
                 .positionId(positionId)
@@ -705,10 +749,11 @@ public class ExchangesService {
 
                 //Exit Price calculation
                 double spreadPct = Math.abs(extPrice1 - extPrice2) / Math.min(extPrice1, extPrice2) * 100;
+
                 String closeInfo = String.format(
-                        "%s: %s | %s: %s | Spread: %.3f%%",
-                        signal.getFirstPosition().getExchange().getDisplayName(), formatPrice(extPrice1),
-                        signal.getSecondPosition().getExchange().getDisplayName(), formatPrice(extPrice2),
+                        "%s: %s | %s: %s | Spread: %.2f%%",
+                        ExchangeType.abbreviate(signal.getFirstPosition().getExchange().getDisplayName()), formatPrice(extPrice1),
+                        ExchangeType.abbreviate(signal.getSecondPosition().getExchange().getDisplayName()), formatPrice(extPrice2),
                         spreadPct
                 );
 
@@ -863,8 +908,12 @@ public class ExchangesService {
                     .ticker(signal.getTicker())
                     .openTime(LocalDateTime.now(ZoneOffset.UTC))
                     .totalOpenFees(totalOpenFees)
-                    .firstOpenPrice(firstPositions.getFirst().getEntryPrice())
-                    .secondOpenPrice(secondPositions.getFirst().getEntryPrice())
+                    .firstEntryPrice(firstPositions.getFirst().getEntryPrice())
+                    .secondEntryPrice(secondPositions.getFirst().getEntryPrice())
+                    .firstLiqPrice(firstPositions.getFirst().getLiquidationPrice())
+                    .secondLiqPrice(secondPositions.getFirst().getLiquidationPrice())
+                    .firstMarkPrice(firstPositions.getFirst().getEntryPrice())
+                    .secondEntryPrice(secondPositions.getFirst().getMarkPrice())
                     .totalCloseFees(0.0)
                     .firstFundingNet(0.0)
                     .secondFundingNet(0.0)
@@ -1312,6 +1361,8 @@ public class ExchangesService {
             double secondSlippageImpact = secondCalculatedPnl - secondApiPnl;
 
             pnlData.setSecondUnrealizedPnl(secondCalculatedPnl);
+            pnlData.setFirstMarkPrice(firstPositions.getFirst().getMarkPrice());
+            pnlData.setSecondMarkPrice(secondPositions.getFirst().getMarkPrice());
 
             log.info("[{}] P&L: size={}, entry={}, effective={} ({})",
                     ex2.getName(),
@@ -1784,9 +1835,9 @@ public class ExchangesService {
 
     private String formatPrice(double price) {
         if (price == 0) return "N/A";
-        if (price >= 1) return String.format("%.4f", price);
-        if (price >= 0.01) return String.format("%.6f", price);
-        return String.format("%.8f", price);  // для очень маленьких токенов
+        if (price >= 1) return String.format("%.2f", price);
+        if (price >= 0.01) return String.format("%.4f", price);
+        return String.format("%.6f", price);
     }
 
     private boolean isPositionClosed(List<Position> positions) {

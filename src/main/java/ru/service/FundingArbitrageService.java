@@ -83,7 +83,9 @@ public class FundingArbitrageService {
                     break;
                 }
 
-                if (rate.getSymbol().equalsIgnoreCase("MSTR") || rate.getSymbol().equalsIgnoreCase("CRCL")) {
+                if (rate.getSymbol().equalsIgnoreCase("MSTR")
+                        || rate.getSymbol().equalsIgnoreCase("CRCL")
+                        || rate.getSymbol().equalsIgnoreCase("SIREN")) {
                     continue;
                 }
 
@@ -129,78 +131,6 @@ public class FundingArbitrageService {
             log.error("[FundingBot] Error tracking funding rates", e);
         }
     }
-
-
-//    @Scheduled(cron = "0 54 * * * *")
-//    private void fundingTracker() {
-//        try {
-//            List<ArbitrageRates> arbitrageRates = calculateArbitrageRates();
-//
-//            if (arbitrageRates.isEmpty()) {
-//                log.warn("[FundingBot] No arbitrage rates calculated");
-//                return;
-//            }
-//
-//            ArbitrageRates topRate = arbitrageRates.getFirst();
-//            double fundingRate = topRate.getArbitrageRate();
-//
-//            if (topRate.getOiRank() != null) {
-//                log.info("[FundingBot] Top pair: {} | Spread: {}bps | OI Rank: #{}",
-//                        topRate.getSymbol(),
-//                        String.format("%.2f", fundingRate),
-//                        topRate.getOiRank());
-//            } else {
-//                log.info("[FundingBot] Top pair: {} | Spread: {}bps",
-//                        topRate.getSymbol(),
-//                        String.format("%.2f", fundingRate));
-//            }
-//
-//            double minRate = fundingConfig.getThresholds().getSmartModeRate();
-//
-//            if (fundingRate < minRate) {
-//                log.info("[FundingBot] Skipping {}: {}bps < {}bps (min threshold)",
-//                        topRate.getSymbol(), fundingRate, minRate);
-//                return;
-//            }
-//
-//            //Mode selecting
-//            double fastThreshold = fundingConfig.getThresholds().getFastModeRate();
-//            HoldingMode selectedMode;
-//            int leverage;
-//
-//            if (fundingRate >= fastThreshold) {
-//                //Fast Mode: >= 150 bps
-//                selectedMode = HoldingMode.FAST_MODE;
-//                leverage = fundingConfig.getFast().getLeverage();
-//
-//                log.info("[FundingBot] FastMode selected: {}bps >= {}bps",
-//                        fundingRate, fastThreshold);
-//                log.info("[FundingBot] Opening {} with {}x leverage (close after funding rate received)",
-//                        topRate.getSymbol(), leverage);
-//            } else {
-//                //Smart Mode: 50-149 bps
-//                selectedMode = HoldingMode.SMART_MODE;
-//                leverage = fundingConfig.getSmart().getLeverage();
-//
-//                log.info("[FundingBot] SmartMode selected: {}bps < {}bps",
-//                        fundingRate, fastThreshold);
-//                log.info("[FundingBot] Opening {} with {}x leverage (hold until unprofitable)",
-//                        topRate.getSymbol(), leverage);
-//            }
-//
-//            //Sending event to listeners
-//            for (Long chatId : fundingContext.getSubscriberIds()) {
-//                eventPublisher.publishEvent(new FundingAlertEvent(chatId, topRate, selectedMode, leverage));
-//            }
-//
-//            //Sending open signal to exchanges
-//            FundingOpenSignal signal = convertToSignal(topRate, selectedMode, leverage, fundingRate);
-//            eventPublisher.publishEvent(new NewArbitrageEvent(signal));
-//
-//        } catch (Exception e) {
-//            log.error("[FundingBot] Error in funding tracker", e);
-//        }
-//    }
 
     public Map<String, Map<String, Object>> getFundingRates() {
         Map<String, Object> fullResponse = getFullApiResponse();

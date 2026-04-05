@@ -1115,7 +1115,7 @@ public class AsterClient {
             result.setSymbol(symbol);
             result.setSide(last.getSide());
             result.setPositionSide(last.getPositionSide());
-            result.setPrice(String.valueOf(avgPrice));
+            result.setPrice(avgPrice);
             result.setQty(String.valueOf(totalQty));
             result.setQuoteQty(String.valueOf(totalQuoteQty));
             result.setCommission(String.valueOf(totalCommission));

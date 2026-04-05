@@ -16,8 +16,8 @@ public class PositionPnLData {
     private double secondMarkPrice;
     private double firstLiqPrice;
     private double secondLiqPrice;
-    private double firstOpenPrice;
-    private double secondOpenPrice;
+    private double firstEntryPrice;
+    private double secondEntryPrice;
     private double totalOpenFees;
     private double totalCloseFees;
     private double firstFundingNet;

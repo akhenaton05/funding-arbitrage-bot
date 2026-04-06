@@ -174,36 +174,6 @@ public class ExchangesService {
         log.info("[FundingBot] Aster funding prediction completed");
     }
 
-//    @Scheduled(fixedDelay = 300000) //Every 5 min
-//    public void updateOpenPositionsPnL() {
-//        if (openedPositions.isEmpty()) {
-//            return;
-//        }
-//
-//        log.debug("[FundingBot] Updating P&L for {} open positions", openedPositions.size());
-//
-//        for (FundingCloseSignal signal : openedPositions.values()) {
-//            if (closingInProgress.contains(signal.getId())) {
-//                log.debug("[FundingBot] Skipping PnL update for {} - closing in progress", signal.getId());
-//                continue;
-//            }
-//
-//            try {
-//                PositionPnLData pnlData = calculateCurrentPnL(signal);
-//
-//                if (pnlData == null) {
-//                    continue;
-//                }
-//
-//                checkPnLThreshold(signal, pnlData);
-//
-//            } catch (Exception e) {
-//                log.error("[FundingBot] Failed to update P&L for {}: {}",
-//                        signal.getId(), e.getMessage());
-//            }
-//        }
-//    }
-
     @Scheduled(fixedDelay = 600000) //Every 10 min
     public void checkPositions() {
         if (openedPositions.isEmpty()) {
@@ -307,7 +277,7 @@ public class ExchangesService {
             String errorMsg = "[FundingBot] More than an hour until funding, position not opened";
             log.info("[FundingBot] More than an hour until funding, position not opened");
 
-            publishFailureEvent("E-0000", signal, errorMsg, marginBalance, false);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
             rollbackPositionId();
             return errorMsg;
         }
@@ -316,7 +286,7 @@ public class ExchangesService {
             String errorMsg = "[FundingBot] No balance available to open position: " + marginBalance;
             log.info("[FundingBot] No balance available to open position: {}", marginBalance);
 
-            publishFailureEvent("E-0000", signal, errorMsg, marginBalance, false);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
             rollbackPositionId();
             return errorMsg;
         }
@@ -368,7 +338,7 @@ public class ExchangesService {
             String errorMsg = "[FundingBot] Failed to calculate position sizes";
             log.error(errorMsg);
             balanceMap.remove(positionId);
-            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
             rollbackPositionId();
             return errorMsg;
         }
@@ -528,7 +498,7 @@ public class ExchangesService {
             }
 
             balanceMap.remove(positionId);
-            publishFailureEvent(positionId, signal, errorMsg, rollbackLoss, false);
+            publishFailureEvent(positionId, signal, errorMsg, rollbackLoss);
             rollbackPositionId();
             log.warn("[FundingBot] Position ID {} rolled back", positionId);
 
@@ -556,7 +526,7 @@ public class ExchangesService {
 
                 balanceMap.remove(positionId);
                 positionDataMap.remove(positionId);
-                publishFailureEvent(positionId, signal, errorMsg, balanceLoss, false);
+                publishFailureEvent(positionId, signal, errorMsg, balanceLoss);
                 rollbackPositionId();
                 log.warn("[FundingBot] Position ID {} rolled back due to validation failure", positionId);
 
@@ -570,7 +540,7 @@ public class ExchangesService {
 
             balanceMap.remove(positionId);
             positionDataMap.remove(positionId);
-            publishFailureEvent(positionId, signal, errorMsg, marginBalance, false);
+            publishFailureEvent(positionId, signal, errorMsg, marginBalance);
             rollbackPositionId();
             log.warn("[FundingBot] Position ID {} rolled back due to closing exception", positionId);
 
@@ -1421,7 +1391,7 @@ public class ExchangesService {
     }
 
     //Events
-    private void publishFailureEvent(String positionId, FundingOpenSignal signal, String errorMsg, double balance, boolean success) {
+    private void publishFailureEvent(String positionId, FundingOpenSignal signal, String errorMsg, double balance) {
         eventPublisher.publishEvent(PositionOpenedEvent.builder()
                 .positionId(positionId)
                 .ticker(signal.getTicker())

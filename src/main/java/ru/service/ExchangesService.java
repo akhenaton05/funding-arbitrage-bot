@@ -582,25 +582,11 @@ public class ExchangesService {
                 "Size: " + String.format("%.4f", finalTargetSize) + " " + ticker + " | " +
                 "Mode: " + mode;
 
-        PositionPnLData data = positionDataMap.get(positionId);
-
-        double price1 = data.getFirstEntryPrice();
-        double price2 = data.getSecondEntryPrice();
-
-        double spreadPct = Math.abs(price1 - price2) / Math.min(price1, price2) * 100;
-
-        String openPrice = String.format(
-                "%s: %s | %s: %s | Spread: %.2f%%",
-                ExchangeType.abbreviate(signal.getFirstPosition().getExchange().getDisplayName()), formatPrice(price1),
-                ExchangeType.abbreviate(signal.getSecondPosition().getExchange().getDisplayName()), formatPrice(price2),
-                spreadPct
-        );
-
         eventPublisher.publishEvent(PositionOpenedEvent.builder()
                 .positionId(positionId)
                 .ticker(signal.getTicker())
                 .result(successMsg)
-                .openInfo(openPrice)
+                .data(positionDataMap.get(positionId))
                 .balanceUsed(marginBalance)
                 .firstDirection(signal.getFirstPosition().getDirection().toString())
                 .secondDirection(signal.getSecondPosition().getDirection().toString())
@@ -646,8 +632,6 @@ public class ExchangesService {
             );
 
             double currentSpread = 0.0;
-            double extPrice1 = 0.0;
-            double extPrice2 = 0.0;
 
             try {
                 CompletableFuture.allOf(firstFuture, secondFuture).get(30, TimeUnit.SECONDS);
@@ -656,13 +640,14 @@ public class ExchangesService {
                 try {
                     OrderResult r1 = firstFuture.get();
                     OrderResult r2 = secondFuture.get();
+
                     if (Objects.nonNull(r1)) {
                         finalPnL += r1.getRealizedPnl();
-                        extPrice1 = r1.getExitPrice();
+                        pnlDataBefore.getFirstSnapshot().setExitPrice(r1.getExitPrice());
                     }
                     if (Objects.nonNull(r2)) {
                         finalPnL += r2.getRealizedPnl();
-                        extPrice2 = r2.getExitPrice();
+                        pnlDataBefore.getSecondSnapshot().setExitPrice(r2.getExitPrice());
                     }
                     log.info("[FundingBot] Final PnL from API: {}, no funding fees applied", finalPnL);
                 } catch (Exception e) {
@@ -717,16 +702,6 @@ public class ExchangesService {
                 currentSpread = currentRate.getArbitrageRate();
                 signal.setCurrentFindingRate(currentSpread);
 
-                //Exit Price calculation
-                double spreadPct = Math.abs(extPrice1 - extPrice2) / Math.min(extPrice1, extPrice2) * 100;
-
-                String closeInfo = String.format(
-                        "%s: %s | %s: %s | Spread: %.2f%%",
-                        ExchangeType.abbreviate(signal.getFirstPosition().getExchange().getDisplayName()), formatPrice(extPrice1),
-                        ExchangeType.abbreviate(signal.getSecondPosition().getExchange().getDisplayName()), formatPrice(extPrice2),
-                        spreadPct
-                );
-
                 eventPublisher.publishEvent(PositionClosedEvent.builder()
                         .positionId(signal.getId())
                         .ticker(signal.getTicker())
@@ -735,7 +710,7 @@ public class ExchangesService {
                         .percent(profitPercent)
                         .success(true)
                         .mode(signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode")
-                        .closeInfo(closeInfo)
+                        .data(pnlDataBefore)
                         .rate(currentSpread)
                         .closureReason(signal.getClosureReason())
                         .build()
@@ -760,7 +735,6 @@ public class ExchangesService {
                         .percent(0)
                         .success(false)
                         .mode(signal.getMode().equals(HoldingMode.FAST_MODE) ? "Fast mode" : "Smart mode")
-                        .closeInfo("NaN")
                         .closureReason(signal.getClosureReason())
                         .rate(signal.getCurrentFindingRate())
                         .build()
@@ -870,20 +844,31 @@ public class ExchangesService {
                     String.format("%.4f", secondData.getFee()),
                     String.format("%.4f", totalOpenFees));
 
-            log.info("[TESTING] Opening prices: {}. {}", firstPositions.getFirst().getEntryPrice(), secondPositions.getFirst().getEntryPrice());
+            //Saving position data
+            PositionPriceSnapshot firstPositionPrices = PositionPriceSnapshot.builder()
+                    .exchangeType(firstPositions.getFirst().getExchange())
+                    .entryPrice(firstPositions.getFirst().getEntryPrice())
+                    .liquidationPrice(firstPositions.getFirst().getLiquidationPrice())
+                    .markPrice(0.0)
+                    .exitPrice(0.0)
+                    .build();
+
+            PositionPriceSnapshot secondPositionPrices = PositionPriceSnapshot.builder()
+                    .exchangeType(secondPositions.getFirst().getExchange())
+                    .entryPrice(secondPositions.getFirst().getEntryPrice())
+                    .liquidationPrice(secondPositions.getFirst().getLiquidationPrice())
+                    .markPrice(0.0)
+                    .exitPrice(0.0)
+                    .build();
 
             // Saving data
             PositionPnLData pnlData = PositionPnLData.builder()
                     .positionId(positionId)
                     .ticker(signal.getTicker())
                     .openTime(LocalDateTime.now(ZoneOffset.UTC))
+                    .firstSnapshot(firstPositionPrices)
+                    .secondSnapshot(secondPositionPrices)
                     .totalOpenFees(totalOpenFees)
-                    .firstEntryPrice(firstPositions.getFirst().getEntryPrice())
-                    .secondEntryPrice(secondPositions.getFirst().getEntryPrice())
-                    .firstLiqPrice(firstPositions.getFirst().getLiquidationPrice())
-                    .secondLiqPrice(secondPositions.getFirst().getLiquidationPrice())
-                    .firstMarkPrice(firstPositions.getFirst().getEntryPrice())
-                    .secondEntryPrice(secondPositions.getFirst().getMarkPrice())
                     .totalCloseFees(0.0)
                     .firstFundingNet(0.0)
                     .secondFundingNet(0.0)
@@ -1331,8 +1316,8 @@ public class ExchangesService {
             double secondSlippageImpact = secondCalculatedPnl - secondApiPnl;
 
             pnlData.setSecondUnrealizedPnl(secondCalculatedPnl);
-            pnlData.setFirstMarkPrice(firstPositions.getFirst().getMarkPrice());
-            pnlData.setSecondMarkPrice(secondPositions.getFirst().getMarkPrice());
+            pnlData.getFirstSnapshot().setMarkPrice(firstPositions.getFirst().getMarkPrice());
+            pnlData.getSecondSnapshot().setMarkPrice(secondPositions.getFirst().getMarkPrice());
 
             log.info("[{}] P&L: size={}, entry={}, effective={} ({})",
                     ex2.getName(),
@@ -1396,7 +1381,6 @@ public class ExchangesService {
                 .positionId(positionId)
                 .ticker(signal.getTicker())
                 .result(errorMsg)
-                .openInfo("No info")
                 .balanceUsed(balance)
                 .firstDirection(signal.getFirstPosition().getDirection().toString())
                 .secondDirection(signal.getSecondPosition().getDirection().toString())
@@ -1803,13 +1787,6 @@ public class ExchangesService {
         }
     }
 
-    private String formatPrice(double price) {
-        if (price == 0) return "N/A";
-        if (price >= 1) return String.format("%.2f", price);
-        if (price >= 0.01) return String.format("%.4f", price);
-        return String.format("%.6f", price);
-    }
-
     private boolean isPositionClosed(List<Position> positions) {
         if (positions == null || positions.isEmpty()) return true;
         Position pos = positions.getFirst();
@@ -1847,5 +1824,4 @@ public class ExchangesService {
 
         return false;
     }
-
 }

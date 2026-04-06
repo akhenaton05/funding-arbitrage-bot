@@ -4,6 +4,8 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.AllArgsConstructor;
 import lombok.NoArgsConstructor;
+import ru.dto.funding.PositionPnLData;
+import ru.dto.funding.PositionPriceSnapshot;
 
 import java.util.UUID;
 
@@ -15,7 +17,7 @@ public class PositionOpenedEvent {
     private String positionId;
     private String ticker;
     private String result;
-    private String openInfo;
+    private PositionPnLData data;
     private double balanceUsed;
     private String firstDirection;
     private String secondDirection;

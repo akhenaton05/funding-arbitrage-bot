@@ -21,10 +21,7 @@ import ru.dto.db.dto.TickerStats;
 import ru.dto.db.dto.TradeHistory;
 import ru.dto.db.model.Period;
 import ru.dto.exchanges.*;
-import ru.dto.funding.FundingCloseSignal;
-import ru.dto.funding.ArbitrageRates;
-import ru.dto.funding.HoldingMode;
-import ru.dto.funding.PositionPnLData;
+import ru.dto.funding.*;
 import ru.event.*;
 import ru.utils.FundingArbitrageContext;
 
@@ -483,7 +480,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
                 event.getMode(),
                 event.getTicker(),
                 event.getBalanceUsed(),
-                event.getOpenInfo(),
+                getEntrySpreadInfo(event.getData().getFirstSnapshot(), event.getData().getSecondSnapshot(), event.getData().getEntrySpreadPct()),
                 event.getRate()
         );
     }
@@ -511,7 +508,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*Ticker:* %s\n" +
                         "*Funding Rate:* %.2f%%\n" +
                         "*Reason:* %s\n" +
-                        "*Exit Info:* %s\n" +
+                        "*Exit Spread:* %s\n" +
                         "*P&L:* " + sign + "%.2f USD (%.2f%%)\n" +
                         "*API PnL:* " + sign + "%.2f USD (%.2f%%)\n",
                 pnlEmoji,
@@ -520,9 +517,9 @@ public class TelegramChatService extends TelegramLongPollingBot {
                 event.getTicker(),
                 event.getRate(),
                 event.getClosureReason(),
+                getExitSpreadInfo(event.getData().getEntrySpreadPct(), event.getData().getExitSpreadPct()),
                 event.getPnl(),
                 event.getPercent(),
-                event.getCloseInfo(),
                 event.getApiPnl(),
                 event.getPercent()
         );
@@ -532,12 +529,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
         PositionPnLData pnl = event.getPnlData();
         Duration hold = Duration.between(pnl.getOpenTime(), LocalDateTime.now(ZoneOffset.UTC));
 
-        double openSpread = pnl.getFirstEntryPrice() > 0 && pnl.getSecondEntryPrice() > 0
-                ? Math.abs(pnl.getFirstEntryPrice() - pnl.getSecondEntryPrice())
-                  / Math.min(pnl.getFirstEntryPrice(), pnl.getSecondEntryPrice()) * 100 : 0;
-        double markSpread = pnl.getFirstMarkPrice() > 0 && pnl.getSecondMarkPrice() > 0
-                ? Math.abs(pnl.getFirstMarkPrice() - pnl.getSecondMarkPrice())
-                  / Math.min(pnl.getFirstMarkPrice(), pnl.getSecondMarkPrice()) * 100 : 0;
+        double openSpread = pnl.getFirstSnapshot().getEntryPrice() > 0 && pnl.getSecondSnapshot().getEntryPrice() > 0
+                ? Math.abs( pnl.getFirstSnapshot().getEntryPrice() - pnl.getSecondSnapshot().getEntryPrice())
+                  / Math.min(pnl.getFirstSnapshot().getEntryPrice(), pnl.getSecondSnapshot().getEntryPrice()) * 100 : 0;
+        double markSpread = pnl.getFirstSnapshot().getMarkPrice() > 0 && pnl.getSecondSnapshot().getMarkPrice() > 0
+                ? Math.abs(pnl.getFirstSnapshot().getMarkPrice() - pnl.getSecondSnapshot().getMarkPrice())
+                  / Math.min(pnl.getFirstSnapshot().getMarkPrice(), pnl.getSecondSnapshot().getMarkPrice()) * 100 : 0;
 
         String ex1 = ExchangeType.abbreviate(event.getEx1Name());
         String ex2 = ExchangeType.abbreviate(event.getEx2Name());
@@ -547,7 +544,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String fundSign = pnl.getTotalFundingNet() >= 0 ? "+" : "";
         String grossSign = pnl.getGrossPnl() >= 0 ? "+" : "";
 
-        String format = String.format(
+        return String.format(
                 "🤖 *[FundingBot]:* Position %s %s \uD83D\uDDFF\n\n" +
                         "*Info:*\n" +
                         "Ticker: %s | Margin: %.2f$ \n" +
@@ -560,24 +557,23 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*Gross PnL:* %s%.2f\n" +
                         "*Funding:* %s%.2f\n" +
                         "*Net PnL:* %s%.2f USD (%s%.1f%%)",
-                pnl.getPositionId(), pnl.getTicker(), event.getMode(),
-                event.getBalance(), formatDuration(hold),
-                event.getOpenFundingRate(), event.getCurrentFundingRate(),
+                pnl.getPositionId(), event.getMode(),
+                pnl.getTicker(), event.getBalance(),
+                formatDuration(hold), event.getOpenFundingRate(), event.getCurrentFundingRate(),
 
                 ex1,
-                formatPrice(pnl.getFirstEntryPrice()), formatPrice(pnl.getFirstMarkPrice()),
-                formatPrice(pnl.getFirstLiqPrice()),
+                formatPrice(pnl.getFirstSnapshot().getEntryPrice()), formatPrice(pnl.getFirstSnapshot().getMarkPrice()),
+                formatPrice(pnl.getFirstSnapshot().getLiquidationPrice()),
 
                 ex2,
-                formatPrice(pnl.getSecondEntryPrice()), formatPrice(pnl.getSecondMarkPrice()),
-                formatPrice(pnl.getSecondLiqPrice()),
+                formatPrice(pnl.getSecondSnapshot().getEntryPrice()), formatPrice(pnl.getSecondSnapshot().getMarkPrice()),
+                formatPrice(pnl.getSecondSnapshot().getLiquidationPrice()),
 
                 openSpread, markSpread,
                 grossSign, pnl.getGrossPnl(),
                 fundSign, pnl.getTotalFundingNet(),
                 netSign, pnl.getNetPnl(), netSign, roi
         );
-        return format;
     }
 
     private String formatPrice(double price) {
@@ -960,5 +956,22 @@ public class TelegramChatService extends TelegramLongPollingBot {
         if (data.startsWith("history:")) {
             handleHistoryCallback(chatId, data.substring(8));
         }
+    }
+
+    private String getEntrySpreadInfo(PositionPriceSnapshot firstPos, PositionPriceSnapshot secondPos, double spread) {
+        return String.format(
+                "%s: %s | %s: %s | Spread: %.2f%%",
+                ExchangeType.abbreviate(firstPos.getExchangeType().getDisplayName()), formatPrice(firstPos.getEntryPrice()),
+                ExchangeType.abbreviate(secondPos.getExchangeType().getDisplayName()), formatPrice(secondPos.getEntryPrice()),
+                spread
+        );
+    }
+
+    private String getExitSpreadInfo(double entrySpread, double exitSpread) {
+        return String.format(
+                "S%.2f%% → %.2f%%",
+                entrySpread,
+                exitSpread
+        );
     }
 }

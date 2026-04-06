@@ -4,6 +4,8 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.AllArgsConstructor;
 import lombok.NoArgsConstructor;
+import ru.dto.funding.PositionPnLData;
+import ru.dto.funding.PositionPriceSnapshot;
 
 import java.util.UUID;
 
@@ -14,12 +16,12 @@ import java.util.UUID;
 public class PositionClosedEvent {
     private String positionId;
     private String ticker;
+    private PositionPnLData data;
     private double pnl;
     private double apiPnl;
     private double percent;
     private boolean success;
     private String mode;
-    private String closeInfo;
     private double rate;
     private String closureReason;
 }

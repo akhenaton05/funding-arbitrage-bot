@@ -257,7 +257,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
     }
 
-    public Integer sendMessageAndGetId2(Long chatId, String text) {
+    public Integer sendMessageAndGetId(Long chatId, String text) {
         sendTypingAction(chatId);
 
         SendMessage message = new SendMessage();
@@ -270,20 +270,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
         } catch (TelegramApiException e) {
             log.error("[Telegram] Failed to send message to Telegram chat {}: {}", chatId, e.getMessage());
             return 0;
-        }
-    }
-
-    private Integer sendMessageAndGetId(Long chatId, String text) {
-        try {
-            SendMessage msg = new SendMessage();
-            msg.setChatId(chatId);
-            msg.setText(text);
-            msg.setParseMode("Markdown");
-            Message sent = execute(msg);
-            return sent.getMessageId();
-        } catch (TelegramApiException e) {
-            log.error("Telegram send failed: {}", e.getMessage());
-            return null;
         }
     }
 
@@ -345,10 +331,10 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     @EventListener
     @Async
-    public void handlePositionUpdate(PositionUpdateEvent event) {
+    public void handlePositionNotification(PositionNotificationEvent event) {
         log.info("[Telegram] Position event for {}", event.getPositionId());
 
-        String message = formatPositionEvent(event);
+        String message = formatNotificationEvent(event);
 
         for (Long chatId : fundingContext.getSubscriberIds()) {
             sendMessage(chatId, message);
@@ -378,7 +364,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String message = formatOpeningPositionEvent(event);
 
         for (Long chatId : fundingContext.getSubscriberIds()) {
-            Integer msgId = sendMessageAndGetId2(chatId, message);
+            Integer msgId = sendMessageAndGetId(chatId, message);
 
             if (Objects.nonNull(msgId)) {
                 positionMessageIds.put(event.getPositionId(), msgId);
@@ -422,7 +408,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     @EventListener
     @Async
-    public void dynamicUpdatePositionListener(PositionLiveUpdateEvent event) {
+    public void dynamicUpdatePositionListener(PositionUpdateEvent event) {
         log.info("[Telegram] Position update event for {}", event.getPositionId());
 
         String message = formatLiveUpdate(event);
@@ -525,7 +511,18 @@ public class TelegramChatService extends TelegramLongPollingBot {
         );
     }
 
-    private String formatLiveUpdate(PositionLiveUpdateEvent event) {
+    private String formatNotificationEvent(PositionNotificationEvent event) {
+        return String.format(
+                "🤖 *FundingBot:* Position `%s` Update \uD83D\uDCCC\n\n" +
+                        "*Ticker:* %s\n" +
+                        "*Message:* %s\n",
+                event.getPositionId(),
+                event.getTicker(),
+                event.getMessage()
+        );
+    }
+
+    private String formatLiveUpdate(PositionUpdateEvent event) {
         PositionPnLData pnl = event.getPnlData();
         Duration hold = Duration.between(pnl.getOpenTime(), LocalDateTime.now(ZoneOffset.UTC));
 
@@ -781,22 +778,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
                 event.getPositionId(),
                 event.getTicker(),
                 event.getThresholdPercent(),
-                pnl.getNetPnl()
-        );
-    }
-
-    private String formatPositionEvent(PositionUpdateEvent event) {
-        PositionPnLData pnl = event.getPnlData();
-
-        return String.format(
-                "🤖 *FundingBot:* Position Update \uD83D\uDCCC\n\n" +
-                        "*ID:* `%s`\n" +
-                        "*Ticker:* %s\n" +
-                        "*Message:* %s\n" +
-                        "*P&L:* $%.2f\n",
-                event.getPositionId(),
-                event.getTicker(),
-                event.getMessage(),
                 pnl.getNetPnl()
         );
     }

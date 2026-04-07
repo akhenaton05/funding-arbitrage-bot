@@ -55,7 +55,7 @@ public interface Exchange {
 
     boolean supportsSlTp();
 
-    PositionRiskControl validatePositionRisk(String symbol, Direction direction);
+//    PositionRiskControl validatePositionRisk(String symbol, Direction direction);
 
     boolean isFundingTimeValid(String ticker);
 }

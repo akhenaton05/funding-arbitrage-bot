@@ -190,21 +190,21 @@ public class Lighter implements Exchange {
         return false;
     }
 
-    @Override
-    public PositionRiskControl validatePositionRisk(String symbol, Direction direction) {
-        //Lighter returns just liq price from positions, no mark price
-        List<Position> positions = getPositions(symbol, direction);
-        log.info("[Lighter] PositionRisk position: {}", positions);
-        //Getting markPrice from orderbook
-        double markPrice = lighterClient.getMarkPrice(formatSymbol(symbol));
-        log.info("[Lighter] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), markPrice);
-
-        return PositionRiskControl.builder()
-                .entryPrice(positions.getFirst().getEntryPrice())
-                .liquidationPrice(positions.getFirst().getLiquidationPrice())
-                .markPrice(markPrice)
-                .build();
-    }
+//    @Override
+//    public PositionRiskControl validatePositionRisk(String symbol, Direction direction) {
+//        //Lighter returns just liq price from positions, no mark price
+//        List<Position> positions = getPositions(symbol, direction);
+//        log.info("[Lighter] PositionRisk position: {}", positions);
+//        //Getting markPrice from orderbook
+//        double markPrice = lighterClient.getMarkPrice(formatSymbol(symbol));
+//        log.info("[Lighter] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), markPrice);
+//
+//        return PositionRiskControl.builder()
+//                .entryPrice(positions.getFirst().getEntryPrice())
+//                .liquidationPrice(positions.getFirst().getLiquidationPrice())
+//                .markPrice(markPrice)
+//                .build();
+//    }
 
     //All Lighter funding has 1hr interval
     @Override

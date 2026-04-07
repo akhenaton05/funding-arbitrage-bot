@@ -317,19 +317,19 @@ public class Extended implements Exchange {
         }
     }
 
-    @Override
-    public PositionRiskControl validatePositionRisk(String symbol, Direction direction) {
-        //Extended returns data from position request
-        List<Position> positions = getPositions(symbol, direction);
-        log.info("[Extended] PositionRisk position: {}", positions);
-        log.info("[Extended] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), positions.getFirst().getMarkPrice());
-
-        return PositionRiskControl.builder()
-                .entryPrice(positions.getFirst().getEntryPrice())
-                .liquidationPrice(positions.getFirst().getLiquidationPrice())
-                .markPrice(positions.getFirst().getMarkPrice())
-                .build();
-    }
+//    @Override
+//    public PositionRiskControl validatePositionRisk(String symbol, Direction direction) {
+//        //Extended returns data from position request
+//        List<Position> positions = getPositions(symbol, direction);
+//        log.info("[Extended] PositionRisk position: {}", positions);
+//        log.info("[Extended] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), positions.getFirst().getMarkPrice());
+//
+//        return PositionRiskControl.builder()
+//                .entryPrice(positions.getFirst().getEntryPrice())
+//                .liquidationPrice(positions.getFirst().getLiquidationPrice())
+//                .markPrice(positions.getFirst().getMarkPrice())
+//                .build();
+//    }
 
     //All Extended tickers has 1hr funding
     @Override

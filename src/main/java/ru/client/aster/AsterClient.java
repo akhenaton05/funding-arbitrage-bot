@@ -11,6 +11,7 @@ import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
+import org.apache.hc.core5.http.ParseException;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.net.URIBuilder;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -18,9 +19,14 @@ import org.springframework.stereotype.Component;
 import ru.dto.exchanges.ExchangeType;
 import ru.dto.exchanges.OrderResult;
 import ru.dto.exchanges.aster.*;
+import ru.exceptions.aster.AsterApiException;
+import ru.exceptions.aster.AsterIpBanException;
+import ru.exceptions.aster.AsterRateLimitException;
+import ru.exceptions.aster.AsterUnknownExecutionException;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URI;
@@ -54,7 +60,6 @@ public class AsterClient {
     /**
      * Initialisation
      */
-
     @PostConstruct
     public void init() {
         syncServerTime();
@@ -109,7 +114,6 @@ public class AsterClient {
     /**
      * Executions with signed requests
      */
-
     private String executePublicGet(String endpoint, String queryParams) {
         try {
             URI uri = new URIBuilder(baseUrl + endpoint)
@@ -192,32 +196,6 @@ public class AsterClient {
     /**
      * Leverage
      */
-//
-//    public String setLeverage(String symbol, int leverage) {
-//        StringBuilder params = new StringBuilder();
-//        params.append("symbol=").append(symbol);
-//        params.append("&leverage=").append(leverage);
-//
-//        String response = executeSignedRequest("POST", "/fapi/v1/leverage", params.toString());
-//
-//        log.info("[Aster] setLeverage response for {}: {}", symbol, response);
-//
-//        if (response != null && !response.isEmpty()) {
-//            try {
-//                JsonNode node = objectMapper.readTree(response);
-//                int code = node.path("code").asInt(200);
-//                if (code != 200) {
-//                    log.error("[Aster] setLeverage failed for {} code={} msg={}",
-//                            symbol, code, node.path("msg").asText());
-//                    return null;
-//                }
-//            } catch (Exception e) {
-//                log.warn("[Aster] Failed to parse setLeverage response", e);
-//            }
-//        }
-//        return response;
-//    }
-
     public boolean setLeverage(String symbol, int leverage) {
         StringBuilder params = new StringBuilder();
         params.append("symbol=").append(symbol);
@@ -677,7 +655,6 @@ public class AsterClient {
     /**
      * OrderBook
      */
-
     public PremiumIndexResponse getPremiumIndexInfo(String symbol) {
         try {
             URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/premiumIndex");
@@ -706,9 +683,11 @@ public class AsterClient {
 
                 return response;
             }
+        } catch (AsterApiException e) {
+            throw e;
         } catch (Exception e) {
-            log.error("[Aster] Error getting premium index for {}", symbol, e);
-            return null;
+            log.error("[AsterClient] Еrror getting premium index for {}", symbol, e);
+            throw new AsterApiException(0, null, "Error: " + e.getMessage(), null);
         }
     }
 
@@ -1127,19 +1106,16 @@ public class AsterClient {
                         catch (Exception e) { return 0.0; }
                     }).sum();
 
-            // Средняя цена исполнения
             double avgPrice = totalQty > 0 ? totalQuoteQty / totalQty : 0.0;
 
-            // Берём мета-данные из последнего трейда
             AsterTrade last = orderTrades.getLast();
 
-            // Собираем итоговый объект
             AsterTrade result = new AsterTrade();
             result.setOrderId(orderId);
             result.setSymbol(symbol);
             result.setSide(last.getSide());
             result.setPositionSide(last.getPositionSide());
-            result.setPrice(String.valueOf(avgPrice));
+            result.setPrice(avgPrice);
             result.setQty(String.valueOf(totalQty));
             result.setQuoteQty(String.valueOf(totalQuoteQty));
             result.setCommission(String.valueOf(totalCommission));
@@ -1156,6 +1132,101 @@ public class AsterClient {
 
         } catch (Exception e) {
             log.error("[Aster] getTradeResult error for symbol={}, orderId={}", symbol, orderId, e);
+            return null;
+        }
+    }
+
+    public double getAccumulatedFundingFee(String symbol, long openedAt) {
+        try {
+            String queryParams = "symbol=" + symbol
+                    + "&incomeType=FUNDING_FEE"
+                    + "&startTime=" + openedAt
+                    + "&limit=100";
+
+            String json = executeSignedRequest("GET", "/fapi/v1/income", queryParams);
+            if (json == null || json.isBlank()) {
+                log.warn("[Aster] getAccumulatedFundingFee: empty response for {}", symbol);
+                return 0.0;
+            }
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> incomes = objectMapper.readValue(
+                    json,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, Map.class));
+
+            if (incomes == null || incomes.isEmpty()) {
+                log.info("[Aster] getAccumulatedFundingFee: no funding entries for {} since {}", symbol, openedAt);
+                return 0.0;
+            }
+
+            double total = incomes.stream()
+                    .mapToDouble(e -> {
+                        try { return Double.parseDouble((String) e.get("income")); }
+                        catch (Exception ex) { return 0.0; }
+                    })
+                    .sum();
+
+            log.info("[Aster] Accumulated funding fee: symbol={}, entries={}, total={}, since={}",
+                    symbol, incomes.size(), String.format("%.6f", total), openedAt);
+
+            return total;
+
+        } catch (Exception e) {
+            log.error("[Aster] getAccumulatedFundingFee error for {}: {}", symbol, e.getMessage());
+            return 0.0;
+        }
+    }
+
+    /**
+     * Exceptions
+     */
+    private String validateResponse(CloseableHttpResponse resp) throws IOException, ParseException {
+        int status = resp.getCode();
+        String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+
+        if (status >= 200 && status < 300) {
+            return body;
+        }
+
+        AsterErrorResponse error = tryParseAsterError(body);
+
+        if (status == 429) {
+            throw new AsterRateLimitException(status, Objects.nonNull(error) ? error.getCode() : null,
+                    Objects.nonNull(error) ? error.getMsg() : "Rate limit exceeded", body);
+        }
+
+        if (status == 418) {
+            throw new AsterIpBanException(status, Objects.nonNull(error) ? error.getCode() : null,
+                    Objects.nonNull(error) ? error.getMsg() : "IP banned", body);
+        }
+
+        if (status == 503) {
+            throw new AsterUnknownExecutionException(status, Objects.nonNull(error) ? error.getCode() : null,
+                    Objects.nonNull(error) ? error.getMsg() : "Execution status unknown", body);
+        }
+
+        if (status >= 400 && status < 500) {
+            throw new AsterApiException(status, Objects.nonNull(error) ? error.getCode() : null,
+                    Objects.nonNull(error) ? error.getMsg() : "Client error", body);
+        }
+
+        if (status >= 500) {
+            throw new AsterApiException(status, Objects.nonNull(error) ? error.getCode() : null,
+                    Objects.nonNull(error) ? error.getMsg() : "Server error", body);
+        }
+
+        throw new AsterApiException(status, Objects.nonNull(error) ? error.getCode() : null,
+                Objects.nonNull(error) ? error.getMsg() : "Unexpected HTTP status", body);
+    }
+
+    private AsterErrorResponse tryParseAsterError(String body) {
+        if (body == null || body.isBlank()) {
+            return null;
+        }
+
+        try {
+            return objectMapper.readValue(body, AsterErrorResponse.class);
+        } catch (Exception e) {
             return null;
         }
     }

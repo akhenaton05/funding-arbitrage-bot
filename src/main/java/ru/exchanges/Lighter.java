@@ -6,12 +6,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.stereotype.Service;
 import ru.client.lighter.LighterClient;
 import ru.dto.exchanges.*;
-import ru.dto.exchanges.lighter.FundingPayment;
-import ru.dto.exchanges.lighter.LighterOrderBook;
 import ru.dto.exchanges.lighter.LighterOrderBookResponse;
 import ru.dto.exchanges.lighter.LighterPosition;
 import ru.dto.funding.FundingCloseSignal;
-import ru.dto.funding.PositionPnLData;
 import ru.mapper.lighter.LighterOrderBookMapper;
 import ru.mapper.lighter.LighterPositionMapper;
 
@@ -74,6 +71,8 @@ public class Lighter implements Exchange {
         for(LighterPosition pos : positions) {
             result.add(LighterPositionMapper.toPosition(pos));
         }
+        log.info("[LighterDex] LighterPosition: {}", positions);
+        log.info("[LighterDex] Position: {}", result);
         return result;
     }
 
@@ -157,7 +156,7 @@ public class Lighter implements Exchange {
     public int getOpenDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
             case ASTER -> 0;  // Wait 0s for Aster to close
-            case EXTENDED -> 0;   // Wait 0s for Extended to close
+            case EXTENDED -> 3;   // Wait 0s for Extended to close
             default -> 0;
         };
     }
@@ -166,7 +165,7 @@ public class Lighter implements Exchange {
     public int getCloseDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
             case ASTER -> 0;  // Wait 0s for Aster to close
-            case EXTENDED -> 0;   // Wait 0s for Extended to close
+            case EXTENDED -> 4;   // Wait 0s for Extended to close
             default -> 0;
         };
     }
@@ -195,13 +194,21 @@ public class Lighter implements Exchange {
     public PositionRiskControl validatePositionRisk(String symbol, Direction direction) {
         //Lighter returns just liq price from positions, no mark price
         List<Position> positions = getPositions(symbol, direction);
+        log.info("[Lighter] PositionRisk position: {}", positions);
         //Getting markPrice from orderbook
         double markPrice = lighterClient.getMarkPrice(formatSymbol(symbol));
         log.info("[Lighter] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), markPrice);
 
         return PositionRiskControl.builder()
+                .entryPrice(positions.getFirst().getEntryPrice())
                 .liquidationPrice(positions.getFirst().getLiquidationPrice())
                 .markPrice(markPrice)
                 .build();
+    }
+
+    //All Lighter funding has 1hr interval
+    @Override
+    public boolean isFundingTimeValid(String ticker) {
+        return true;
     }
 }

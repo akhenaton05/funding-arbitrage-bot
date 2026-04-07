@@ -1,46 +1,62 @@
 package ru.service;
 
-import lombok.AllArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.telegram.telegrambots.bots.DefaultBotOptions;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.ActionType;
+import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.send.SendChatAction;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
 import org.telegram.telegrambots.meta.api.objects.*;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import ru.config.*;
-import ru.dto.funding.FundingCloseSignal;
-import ru.dto.exchanges.PositionBalance;
-import ru.dto.exchanges.PositionClosedEvent;
-import ru.dto.exchanges.PositionOpenedEvent;
-import ru.dto.funding.ArbitrageRates;
-import ru.dto.funding.HoldingMode;
-import ru.dto.funding.PositionPnLData;
-import ru.event.FundingAlertEvent;
-import ru.event.PnLThresholdEvent;
-import ru.event.PositionUpdateEvent;
+import ru.dto.db.dto.TickerStats;
+import ru.dto.db.dto.TradeHistory;
+import ru.dto.db.model.Period;
+import ru.dto.exchanges.*;
+import ru.dto.funding.*;
+import ru.event.*;
 import ru.utils.FundingArbitrageContext;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
-@AllArgsConstructor
 public class TelegramChatService extends TelegramLongPollingBot {
 
     private final TelegramBotConfig telegramBotConfig;
     private final FundingArbitrageContext fundingContext;
     private final FundingArbitrageService fundingService;
     private final ExchangesService exchangesService;
+    private final TradeHistoryService tradeHistoryService;
+
+    private final Map<String, Integer> positionMessageIds = new ConcurrentHashMap<>();
+
+
+    public TelegramChatService(TelegramBotConfig telegramBotConfig,
+                               FundingArbitrageContext fundingContext,
+                               FundingArbitrageService fundingService,
+                               ExchangesService exchangesService,
+                               TradeHistoryService tradeHistoryService,
+                               DefaultBotOptions botOption) {
+        super(botOption);
+        this.telegramBotConfig = telegramBotConfig;
+        this.fundingContext = fundingContext;
+        this.fundingService = fundingService;
+        this.exchangesService = exchangesService;
+        this.tradeHistoryService = tradeHistoryService;
+    }
 
     @Override
     public String getBotUsername() {
@@ -70,8 +86,11 @@ public class TelegramChatService extends TelegramLongPollingBot {
                     handleCommand(chatId, userMessage);
                 }
             }
+        } else if (update.hasCallbackQuery()) {
+            handleCallbackQuery(update.getCallbackQuery());
         }
     }
+
 
     private void handleCommand(Long chatId, String command) {
         String[] parts = command.trim().split("\\s+", 2);
@@ -86,6 +105,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
             case "/closeall" -> closeAllPositions();
             case "/pnl" -> calculatePositionPnl(chatId, parts);
             case "/balance" -> getExchangesBalance(chatId);
+            case "/history" -> getTradeHistory(chatId);
         }
     }
 
@@ -114,13 +134,15 @@ public class TelegramChatService extends TelegramLongPollingBot {
                     .limit(10)
                     .forEach(opp -> {
                         String oi = opp.getOiRank() != null ? "#" + String.format("%-3d", opp.getOiRank()) : "-  ";
+                        String firstDir = opp.getFirstDirection().equals(Direction.LONG) ? "↑" : "↓";
+                        String secondDir = opp.getSecondDirection().equals(Direction.LONG) ? "↑" : "↓";
                         result.append(String.format(
                                 "%-7s | %s | %6.2f%% | %s/%s\n",
                                 opp.getSymbol(),
                                 oi,
                                 opp.getArbitrageRate(),
-                                opp.getFirstExchange().getDisplayName(),
-                                opp.getSecondExchange().getDisplayName()
+                                opp.getFirstExchange().getDisplayName() + firstDir,
+                                opp.getSecondExchange().getDisplayName() + secondDir
                         ));
                     });
 
@@ -174,11 +196,10 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         result.forEach((exchange, balance) -> {
             if (exchange.equals("TOTAL")) return;
-            sb.append(String.format("🏦 *%s:* `$%.2f`\n", exchange, balance));
+            sb.append(String.format("\uD83D\uDDFF *%s:* $%.2f\n", exchange, balance));
         });
 
-        sb.append("\n─────────────────\n");
-        sb.append(String.format("💵 *Total: * `$%.2f`", result.getOrDefault("TOTAL", 0.0)));
+        sb.append(String.format("💵 *Total: * $%.2f", result.getOrDefault("TOTAL", 0.0)));
 
         sendMessage(chatId, sb.toString());
     }
@@ -236,6 +257,22 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
     }
 
+    public Integer sendMessageAndGetId(Long chatId, String text) {
+        sendTypingAction(chatId);
+
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(text);
+        message.setParseMode("Markdown");
+
+        try {
+            return execute(message).getMessageId();
+        } catch (TelegramApiException e) {
+            log.error("[Telegram] Failed to send message to Telegram chat {}: {}", chatId, e.getMessage());
+            return 0;
+        }
+    }
+
     private void sendTypingAction(Long chatId) {
         try {
             SendChatAction chatAction = new SendChatAction();
@@ -254,29 +291,29 @@ public class TelegramChatService extends TelegramLongPollingBot {
         sendMessage(event.getChatId(), formatAlert(event.getMessage()));
     }
 
-    @EventListener
-    @Async
-    public void handlePositionOpened(PositionOpenedEvent event) {
-        log.info("[Telegram] Position opened event for {}", event.getTicker());
+//    @EventListener
+//    @Async
+//    public void handlePositionOpened(PositionOpenedEvent event) {
+//        log.info("[Telegram] Position opened event for {}", event.getTicker());
+//
+//        String message = formatPositionOpenedMessage(event);
+//
+//        for (Long chatId : fundingContext.getSubscriberIds()) {
+//            sendMessage(chatId, message);
+//        }
+//    }
 
-        String message = formatPositionOpenedMessage(event);
-
-        for (Long chatId : fundingContext.getSubscriberIds()) {
-            sendMessage(chatId, message);
-        }
-    }
-
-    @EventListener
-    @Async
-    public void handlePositionClosed(PositionClosedEvent event) {
-        log.info("[Telegram] Position closed event for {}", event.getTicker());
-
-        String message = formatPositionClosedMessage(event);
-
-        for (Long chatId : fundingContext.getSubscriberIds()) {
-            sendMessage(chatId, message);
-        }
-    }
+//    @EventListener
+//    @Async
+//    public void handlePositionClosed(PositionClosedEvent event) {
+//        log.info("[Telegram] Position closed event for {}", event.getTicker());
+//
+//        String message = formatPositionClosedMessage(event);
+//
+//        for (Long chatId : fundingContext.getSubscriberIds()) {
+//            sendMessage(chatId, message);
+//        }
+//    }
 
     @EventListener
     @Async
@@ -294,14 +331,253 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     @EventListener
     @Async
-    public void handlePositionUpdate(PositionUpdateEvent event) {
+    public void handlePositionNotification(PositionNotificationEvent event) {
         log.info("[Telegram] Position event for {}", event.getPositionId());
 
-        String message = formatPositionEvent(event);
+        String message = formatNotificationEvent(event);
 
         for (Long chatId : fundingContext.getSubscriberIds()) {
             sendMessage(chatId, message);
         }
+    }
+
+    private void editMessage(Long chatId, Integer messageId, String text) {
+        try {
+            EditMessageText edit = new EditMessageText();
+            edit.setChatId(chatId);
+            edit.setMessageId(messageId);
+            edit.setText(text);
+            edit.setParseMode("Markdown");
+            execute(edit);
+        } catch (TelegramApiException e) {
+            if (!e.getMessage().contains("message is not modified")) {
+                log.warn("Telegram edit failed: {}", e.getMessage());
+            }
+        }
+    }
+
+    @EventListener
+    @Async
+    public void dynamicOpeningPositionListener(PositionOpeningEvent event) {
+        log.info("[Telegram] Position opening event for {}", event.getPositionId());
+
+        String message = formatOpeningPositionEvent(event);
+
+        for (Long chatId : fundingContext.getSubscriberIds()) {
+            Integer msgId = sendMessageAndGetId(chatId, message);
+
+            if (Objects.nonNull(msgId)) {
+                positionMessageIds.put(event.getPositionId(), msgId);
+            }
+        }
+    }
+
+    @EventListener
+    @Async
+    public void dynamicOpenedPositionListener(PositionOpenedEvent event) {
+        log.info("[Telegram] Position opened event for {}", event.getPositionId());
+
+        String message = formatOpenedPositionEvent(event);
+
+        for (Long chatId : fundingContext.getSubscriberIds()) {
+            Integer msgId = positionMessageIds.get(event.getPositionId());
+            editMessage(chatId, msgId, message);
+
+            if (Objects.nonNull(msgId)) {
+                positionMessageIds.put(event.getPositionId(), msgId);
+            }
+        }
+    }
+
+    @EventListener
+    @Async
+    public void dynamicClosedPositionListener(PositionClosedEvent event) {
+        log.info("[Telegram] Position opened event for {}", event.getPositionId());
+
+        String message = formatPositionClosedMessage(event);
+
+        for (Long chatId : fundingContext.getSubscriberIds()) {
+            Integer msgId = positionMessageIds.get(event.getPositionId());
+            editMessage(chatId, msgId, message);
+
+            if (Objects.nonNull(msgId)) {
+                positionMessageIds.put(event.getPositionId(), msgId);
+            }
+        }
+    }
+
+    @EventListener
+    @Async
+    public void dynamicUpdatePositionListener(PositionUpdateEvent event) {
+        log.info("[Telegram] Position update event for {}", event.getPositionId());
+
+        String message = formatLiveUpdate(event);
+
+        for (Long chatId : fundingContext.getSubscriberIds()) {
+            Integer msgId = positionMessageIds.get(event.getPositionId());
+            editMessage(chatId, msgId, message);
+
+            if (Objects.nonNull(msgId)) {
+                positionMessageIds.put(event.getPositionId(), msgId);
+            }
+        }
+    }
+
+    private String formatOpeningPositionEvent(PositionOpeningEvent event) {
+        return String.format(
+                "🤖 *[FundingBot]:* Opening %s position in %s ⏳",
+                event.getTicker(),
+                event.getMode()
+        );
+    }
+
+    private String formatOpenedPositionEvent(PositionOpenedEvent event) {
+        if (!event.isSuccess()) {
+            if (Objects.nonNull(event.getResult()) &&
+                    event.getResult().contains("No balance available to open position")) {
+                return "🤖 *[FundingBot]:* No margin available to open position";
+            } else if (Objects.nonNull(event.getResult()) &&
+                    event.getResult().contains("More than an hour until funding, position not opened")) {
+                return "🤖 *[FundingBot]:* Funding payment in more than an hour, position wasn't opened";
+            }
+
+            return String.format(
+                    "🤖 *FundingBot:* Position Opening Failed ❌\n\n" +
+                            "*ID:* `%s`\n" +
+                            "*Mode:* %s\n" +
+                            "*Ticker:* %s\n" +
+                            "*Error:* %s\n",
+                    event.getPositionId(),
+                    event.getMode(),
+                    event.getTicker(),
+                    event.getResult()
+            );
+        }
+
+        return String.format(
+                "🤖 *[FundingBot]:* Position Opened ✅\n\n" +
+                        "*ID:* `%s`\n" +
+                        "*Mode:* %s\n" +
+                        "*Ticker:* %s\n" +
+                        "*Margin Used:* %.2f USD\n" +
+                        "*Entry:* %s\n" +
+                        "*Funding Rate:* %.2f%%\n",
+                event.getPositionId(),
+                event.getMode(),
+                event.getTicker(),
+                event.getBalanceUsed(),
+                getEntrySpreadInfo(event.getData().getFirstSnapshot(), event.getData().getSecondSnapshot(), event.getData().getEntrySpreadPct()),
+                event.getRate()
+        );
+    }
+
+    private String formatPositionClosedMessage(PositionClosedEvent event) {
+        String sign = event.getPnl() >= 0 ? "+" : "";
+        if (!event.isSuccess()) {
+            return String.format(
+                    "🤖 *FundingBot:* Position Close Error ❌\n\n" +
+                            "*ID:* `%s`\n" +
+                            "*Mode:* %s\n" +
+                            "*Ticker:* %s\n" +
+                            "*Status:* Manual check required!",
+                    event.getPositionId(),
+                    event.getMode(),
+                    event.getTicker()
+            );
+        }
+        String pnlEmoji = event.getPnl() >= 0 ? "💰" : "\uD83E\uDDF1";
+
+        return String.format(
+                "🤖 *FundingBot:* Position Closed %s\n\n" +
+                        "*ID:* `%s`\n" +
+                        "*Mode:* %s\n" +
+                        "*Ticker:* %s\n" +
+                        "*Funding Rate:* %.2f%%\n" +
+                        "*Reason:* %s\n" +
+                        "*Exit Spread:* %s\n" +
+                        "*P&L:* " + sign + "%.2f USD (%.2f%%)\n" +
+                        "*API PnL:* " + sign + "%.2f USD (%.2f%%)\n",
+                pnlEmoji,
+                event.getPositionId(),
+                event.getMode(),
+                event.getTicker(),
+                event.getRate(),
+                event.getClosureReason(),
+                getExitSpreadInfo(event.getData().getEntrySpreadPct(), event.getData().getExitSpreadPct()),
+                event.getPnl(),
+                event.getPercent(),
+                event.getApiPnl(),
+                event.getPercent()
+        );
+    }
+
+    private String formatNotificationEvent(PositionNotificationEvent event) {
+        return String.format(
+                "🤖 *FundingBot:* Position `%s` Update \uD83D\uDCCC\n\n" +
+                        "*Ticker:* %s\n" +
+                        "*Message:* %s\n",
+                event.getPositionId(),
+                event.getTicker(),
+                event.getMessage()
+        );
+    }
+
+    private String formatLiveUpdate(PositionUpdateEvent event) {
+        PositionPnLData pnl = event.getPnlData();
+        Duration hold = Duration.between(pnl.getOpenTime(), LocalDateTime.now(ZoneOffset.UTC));
+
+        double openSpread = pnl.getFirstSnapshot().getEntryPrice() > 0 && pnl.getSecondSnapshot().getEntryPrice() > 0
+                ? Math.abs( pnl.getFirstSnapshot().getEntryPrice() - pnl.getSecondSnapshot().getEntryPrice())
+                  / Math.min(pnl.getFirstSnapshot().getEntryPrice(), pnl.getSecondSnapshot().getEntryPrice()) * 100 : 0;
+        double markSpread = pnl.getFirstSnapshot().getMarkPrice() > 0 && pnl.getSecondSnapshot().getMarkPrice() > 0
+                ? Math.abs(pnl.getFirstSnapshot().getMarkPrice() - pnl.getSecondSnapshot().getMarkPrice())
+                  / Math.min(pnl.getFirstSnapshot().getMarkPrice(), pnl.getSecondSnapshot().getMarkPrice()) * 100 : 0;
+
+        String ex1 = ExchangeType.abbreviate(event.getEx1Name());
+        String ex2 = ExchangeType.abbreviate(event.getEx2Name());
+
+        double roi = event.getBalance() > 0 ? pnl.getNetPnl() / event.getBalance() * 100 : 0;
+        String netSign = pnl.getNetPnl() >= 0 ? "+" : "";
+        String fundSign = pnl.getTotalFundingNet() >= 0 ? "+" : "";
+        String grossSign = pnl.getGrossPnl() >= 0 ? "+" : "";
+
+        return String.format(
+                "🤖 *[FundingBot]:* Position %s %s \uD83D\uDDFF\n\n" +
+                        "*Info:*\n" +
+                        "Ticker: %s | Margin: %.2f$ \n" +
+                        "Holdtime: %s | Rate: %.2f→%.2f\n\n" +
+                        "\uD83D\uDCCA *Position:*\n" +
+                        "*%s:* %s→%s (Liq %s)\n" +
+                        "*%s:* %s→%s (Liq %s)\n" +
+                        "*Spread:* %.3f%%→%.3f%%\n\n" +
+                        "\uD83D\uDCB0 *Profit*:\n" +
+                        "*Gross PnL:* %s%.2f\n" +
+                        "*Funding:* %s%.2f\n" +
+                        "*Net PnL:* %s%.2f USD (%s%.1f%%)",
+                pnl.getPositionId(), event.getMode(),
+                pnl.getTicker(), event.getBalance(),
+                formatDuration(hold), event.getOpenFundingRate(), event.getCurrentFundingRate(),
+
+                ex1,
+                formatPrice(pnl.getFirstSnapshot().getEntryPrice()), formatPrice(pnl.getFirstSnapshot().getMarkPrice()),
+                formatPrice(pnl.getFirstSnapshot().getLiquidationPrice()),
+
+                ex2,
+                formatPrice(pnl.getSecondSnapshot().getEntryPrice()), formatPrice(pnl.getSecondSnapshot().getMarkPrice()),
+                formatPrice(pnl.getSecondSnapshot().getLiquidationPrice()),
+
+                openSpread, markSpread,
+                grossSign, pnl.getGrossPnl(),
+                fundSign, pnl.getTotalFundingNet(),
+                netSign, pnl.getNetPnl(), netSign, roi
+        );
+    }
+
+    private String formatPrice(double price) {
+        if (price >= 1000) return String.format("%.1f", price);
+        if (price >= 1) return String.format("%.3f", price);
+        if (price >= 0.01) return String.format("%.4f", price);
+        return String.format("%.6f", price);
     }
 
     private void getTrades(Long chatId) {
@@ -396,88 +672,51 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         return sb.toString();
     }
-
-    private String formatPositionOpenedMessage(PositionOpenedEvent event) {
-        if (!event.isSuccess()) {
-            if (event.getResult() != null &&
-                    event.getResult().contains("No balance available to open position")) {
-                return "🤖 *FundingBot:* No margin available to open position";
-            }
-            else if (event.getResult() != null &&
-                    event.getResult().contains("More than an hour until funding, position not opened")) {
-                return "🤖 *FundingBot:* Funding payment in more than an hour, position wasn't opened";
-            }
-
-            return String.format(
-                    "🤖 *FundingBot:* Position Opening Failed ❌\n\n" +
-                            "*ID:* `%s`\n" +
-                            "*Mode:* %s\n" +
-                            "*Ticker:* %s\n" +
-                            "*Error:* %s\n",
-                    event.getPositionId(),
-                    event.getMode(),
-                    event.getTicker(),
-                    event.getResult()
-            );
-        }
-
-        return String.format(
-                "🤖 *FundingBot:* Position Opened ✅\n\n" +
-                        "*ID:* `%s`\n" +
-                        "*Mode:* %s\n" +
-                        "*Ticker:* %s\n" +
-                        "*Margin Used:* %.2f USD\n" +
-                        "*Funding Rate:* %.2f%%\n",
-                event.getPositionId(),
-                event.getMode(),
-                event.getTicker(),
-                event.getBalanceUsed(),
-                event.getRate()
-        );
-    }
-
-    private String formatPositionClosedMessage(PositionClosedEvent event) {
-        String sign = event.getPnl() >= 0 ? "+" : "";
-        if (!event.isSuccess()) {
-            return String.format(
-                    "🤖 *FundingBot:* Position Close Error ❌\n\n" +
-                            "*ID:* `%s`\n" +
-                            "*Mode:* %s\n" +
-                            "*Ticker:* %s\n" +
-                            "*Status:* Manual check required!",
-                    event.getPositionId(),
-                    event.getMode(),
-                    event.getTicker()
-            );
-        }
-        String pnlEmoji = event.getPnl() >= 0 ? "💰" : "\uD83E\uDDF1";
-
-        return String.format(
-                "🤖 *FundingBot:* Position Closed %s\n\n" +
-                        "*ID:* `%s`\n" +
-                        "*Mode:* %s\n" +
-                        "*Ticker:* %s\n" +
-                        "*Funding Rate:* %.2f%%\n" +
-                        "*Reason:* %s\n" +
-                        "*P&L:* " + sign + "%.2f USD (%.2f%%)\n" +
-                        "*API PnL:* " + sign + "%.2f USD (%.2f%%)\n",
-                pnlEmoji,
-                event.getPositionId(),
-                event.getMode(),
-                event.getTicker(),
-                event.getRate(),
-                event.getClosureReason(),
-                event.getPnl(),
-                event.getPercent(),
-                event.getApiPnl(),
-                event.getPercent()
-        );
-    }
+//
+//    private String formatPositionOpenedMessage(PositionOpenedEvent event) {
+//        if (!event.isSuccess()) {
+//            if (event.getResult() != null &&
+//                    event.getResult().contains("No balance available to open position")) {
+//                return "🤖 *FundingBot:* No margin available to open position";
+//            } else if (event.getResult() != null &&
+//                    event.getResult().contains("More than an hour until funding, position not opened")) {
+//                return "🤖 *FundingBot:* Funding payment in more than an hour, position wasn't opened";
+//            }
+//
+//            return String.format(
+//                    "🤖 *FundingBot:* Position Opening Failed ❌\n\n" +
+//                            "*ID:* `%s`\n" +
+//                            "*Mode:* %s\n" +
+//                            "*Ticker:* %s\n" +
+//                            "*Error:* %s\n",
+//                    event.getPositionId(),
+//                    event.getMode(),
+//                    event.getTicker(),
+//                    event.getResult()
+//            );
+//        }
+//
+//        return String.format(
+//                "🤖 *FundingBot:* Position Opened ✅\n\n" +
+//                        "*ID:* `%s`\n" +
+//                        "*Mode:* %s\n" +
+//                        "*Ticker:* %s\n" +
+//                        "*Margin Used:* %.2f USD\n" +
+//                        "*Open:* %s\n" +
+//                        "*Funding Rate:* %.2f%%\n",
+//                event.getPositionId(),
+//                event.getMode(),
+//                event.getTicker(),
+//                event.getBalanceUsed(),
+//                event.getOpenInfo(),
+//                event.getRate()
+//        );
+//    }
 
     private String formatAlert(ArbitrageRates rate) {
         return String.format("🚨 *High Arbitrage Alert* 🚨\n\n" +
                         "*Symbol: %s*\n" +
-                        "*Max Arb:* %.2f%%\n" +
+                        "*Funding Rate:* %.2f%%\n" +
                         "*%s:* %.2f%%\n" +
                         "*%s:* %.2f%%\n" +
                         "*Action:* %s",
@@ -543,19 +782,177 @@ public class TelegramChatService extends TelegramLongPollingBot {
         );
     }
 
-    private String formatPositionEvent(PositionUpdateEvent event) {
-        PositionPnLData pnl = event.getPnlData();
+    private List<InlineKeyboardButton> createButtonRow(String text1, String callback1, String text2, String callback2) {
+        List<InlineKeyboardButton> row = new ArrayList<>();
 
+        InlineKeyboardButton btn1 = new InlineKeyboardButton();
+        btn1.setText(text1);
+        btn1.setCallbackData(callback1);
+        row.add(btn1);
+
+        if (text2 != null && callback2 != null) {
+            InlineKeyboardButton btn2 = new InlineKeyboardButton();
+            btn2.setText(text2);
+            btn2.setCallbackData(callback2);
+            row.add(btn2);
+        }
+
+        return row;
+    }
+
+    /**
+     * History
+     */
+    private void getTradeHistory(Long chatId) {
+        log.info("[Telegram] Trade history request from chat {}", chatId);
+        sendTypingAction(chatId);
+
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText("🤖 *FundingBot:* Choose period:");
+        message.setParseMode("Markdown");
+
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(createButtonRow("📅 Today", "history:DAY", "📅 Week", "history:WEEK"));
+        rows.add(createButtonRow("📅 Month", "history:MONTH", "📋 All", "history:ALL"));
+        markup.setKeyboard(rows);
+        message.setReplyMarkup(markup);
+
+        try {
+            execute(message);
+        } catch (TelegramApiException e) {
+            log.error("[Telegram] Failed to send history menu", e);
+        }
+    }
+
+    private void handleHistoryCallback(Long chatId, String periodStr) {
+        try {
+            Period period = Period.valueOf(periodStr);
+            sendMessage(chatId, formatSinglePeriod(period));
+        } catch (IllegalArgumentException e) {
+            sendMessage(chatId, "❌ Unknown period: " + periodStr);
+        }
+    }
+
+    private String formatSinglePeriod(Period period) {
+        TradeHistory stats = tradeHistoryService.getStats(period);
+
+        String label = switch (period) {
+            case DAY -> "Today";
+            case WEEK -> "7 Days";
+            case MONTH -> "30 Days";
+            case ALL -> "All Time";
+        };
+
+        if (stats.getTotalTrades() == 0) {
+            return String.format("🤖 *FundingBot:* Trade History\n\n📅 *%s* — _No trades_", label);
+        }
+
+        return String.format("""
+                        🤖 *FundingBot:* Trade History 📈
+                        ━━━━━━━━━━━━━━━━━
+                        📅 *%s*  |  *%d Orders*  |  💼 *%.2f$ Volume*
+                        
+                        💰 *P&L:*
+                        *Total:* %s%.2f$ / %s%.2f%% ROI
+                        *Avg/trade:* %s%.2f$
+                        *Funding:* %s%.2f$ (%.1f%% from P&L)
+                        
+                        🎯 *Stats:*
+                        *Win Rate:* %d/%d (%.1f%%)
+                        *Best:* +%.2f$ / Worst: %.2f$
+                        
+                        📦 *Funding:*
+                        *Avg:* %.2f%% → %.2f%% / *Delta:* %s%.2f%%
+                        (%s)
+                        
+                        ⌛️ *Hold time:*
+                        *Avg:* %s / *Max:* %s %s / *Min:* %s %s
+                        
+                        🪙 *Tickers:*
+                        %s""",
+                //header
+                label, stats.getTotalTrades(), stats.getTotalVolume(),
+                // P&L
+                stats.getTotalPnl() >= 0 ? "+" : "", stats.getTotalPnl(),
+                stats.getPnlToVolumePercent() >= 0 ? "+" : "", stats.getPnlToVolumePercent(),
+                stats.getAvgPnlPerTrade() >= 0 ? "+" : "", stats.getAvgPnlPerTrade(),
+                stats.getTotalFunding() >= 0 ? "+" : "", stats.getTotalFunding(),
+                stats.getFundingToPnlPercent(),
+                //Stats
+                stats.getWins(), stats.getTotalTrades(), stats.getWinRate(),
+                stats.getBestTrade(), stats.getWorstTrade(),
+                //Funding
+                stats.getAvgOpenRate(), stats.getAvgCloseRate(),
+                stats.getAvgRateDelta() >= 0 ? "+" : "", stats.getAvgRateDelta(),
+                stats.getAvgRateDelta() < 0
+                        ? "Closing after rate is down"
+                        : "Closing after rate is up",
+                //Hold time
+                formatDuration(stats.getAvgHoldTime()),
+                stats.getMaxHoldTicker(), formatDuration(stats.getMaxHoldTime()),
+                stats.getMinHoldTicker(), formatDuration(stats.getMinHoldTime()),
+                //Tickers
+                formatTickerStats(stats.getTickerStats())
+        );
+    }
+
+    private String formatDuration(Duration d) {
+        if (d == null) return "—";
+        long hours = d.toHours();
+        long minutes = d.toMinutesPart();
+        if (hours > 0) return hours + "h " + minutes + "m";
+        return minutes + "m";
+    }
+
+    private String formatTickerStats(List<TickerStats> tickers) {
+        if (tickers == null || tickers.isEmpty()) return "  _no data_";
+        StringBuilder sb = new StringBuilder();
+        for (TickerStats t : tickers) {
+            sb.append(String.format("*%s:* %s$%.2f / %d Orders / Winrate %.0f%%%n",
+                    t.getTicker(),
+                    t.getTotalPnl() >= 0 ? "+" : "",
+                    t.getTotalPnl(),
+                    t.getTradeCount(),
+                    t.getWinRate()));
+        }
+        return sb.toString().stripTrailing();
+    }
+
+    private void handleCallbackQuery(CallbackQuery callbackQuery) {
+        String callbackId = callbackQuery.getId();
+        String data = callbackQuery.getData();
+        Long chatId = callbackQuery.getMessage().getChatId();
+
+        AnswerCallbackQuery answer = new AnswerCallbackQuery();
+        answer.setCallbackQueryId(callbackId);
+        answer.setShowAlert(false);
+        try {
+            execute(answer);
+        } catch (TelegramApiException e) {
+            log.error("[Telegram] Error answering callback", e);
+        }
+
+        if (data.startsWith("history:")) {
+            handleHistoryCallback(chatId, data.substring(8));
+        }
+    }
+
+    private String getEntrySpreadInfo(PositionPriceSnapshot firstPos, PositionPriceSnapshot secondPos, double spread) {
         return String.format(
-                "🤖 *FundingBot:* Position Update \uD83D\uDCCC\n\n" +
-                        "*ID:* `%s`\n" +
-                        "*Ticker:* %s\n" +
-                        "*Message:* %s\n" +
-                        "*P&L:* $%.2f\n",
-                event.getPositionId(),
-                event.getTicker(),
-                event.getMessage(),
-                pnl.getNetPnl()
+                "%s: %s | %s: %s | Spread: %.2f%%",
+                ExchangeType.abbreviate(firstPos.getExchangeType().getDisplayName()), formatPrice(firstPos.getEntryPrice()),
+                ExchangeType.abbreviate(secondPos.getExchangeType().getDisplayName()), formatPrice(secondPos.getEntryPrice()),
+                spread
+        );
+    }
+
+    private String getExitSpreadInfo(double entrySpread, double exitSpread) {
+        return String.format(
+                "S%.2f%% → %.2f%%",
+                entrySpread,
+                exitSpread
         );
     }
 }

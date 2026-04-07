@@ -209,39 +209,48 @@ public class ExtendedClient {
             log.info("[Extended] Opening position by size: market={}, size={}, direction={}",
                     market, String.format("%.4f", size), direction);
 
-            // Validate size
             if (size <= 0) {
                 log.error("[Extended] Invalid size: {}", size);
                 return null;
             }
 
-            // Get step_size for rounding
             double stepSize = getStepSize(market);
             double roundedSize = roundToStepSize(size, stepSize);
 
-            if (roundedSize < size * 0.95) {
-                log.warn("[Extended] Size rounded down significantly: {} → {}",
-                        String.format("%.4f", size),
-                        String.format("%.4f", roundedSize));
-            }
+            ExtendedOrderBook orderBook = getOrderBook(market);
+            double referencePrice;
+            double slippagePct;
 
-            // Get current price for logging
-            double price = getMarkPrice(market);
-            if (price <= 0) {
-                log.error("[Extended] Failed to get mark price for {}", market);
+            if (orderBook != null) {
+                boolean isBuy = direction.equalsIgnoreCase("LONG");
+                List<OrderBookLevel> levels = isBuy ? orderBook.getAsk() : orderBook.getBid();
+                if (levels != null && !levels.isEmpty()) {
+                    referencePrice = Double.parseDouble(levels.get(0).getPrice());
+                    slippagePct = 6.0;
+                    log.info("[Extended] Using orderbook {} price for {}: ${}, slippage={}%",
+                            isBuy ? "ask" : "bid", market, referencePrice, slippagePct);
+                } else {
+                    log.warn("[Extended] Orderbook empty for {} — refusing to open (no liquidity)", market);
+                    return null;
+                }
+            } else {
+                log.warn("[Extended] Orderbook unavailable for {} — refusing to open", market);
                 return null;
             }
 
-            double notional = roundedSize * price;
+            if (referencePrice <= 0) {
+                log.error("[Extended] Failed to get price for {}", market);
+                return null;
+            }
 
+            double notional = roundedSize * referencePrice;
             log.info("[Extended] Position params: size={}, price=${}, notional=${}, step_size={}",
                     String.format("%.4f", roundedSize),
-                    String.format("%.6f", price),
+                    String.format("%.6f", referencePrice),
                     String.format("%.2f", notional),
                     stepSize);
 
-            // Open market position with exact size
-            String externalId = openMarketPosition(market, side, roundedSize, 2.0);
+            String externalId = openMarketPosition(market, side, roundedSize, slippagePct);
 
             if (externalId == null) {
                 log.error("[Extended] Failed to open position with size {}", roundedSize);
@@ -672,6 +681,7 @@ public class ExtendedClient {
                     .build();
 
             HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            log.info("Response: {}" + response.body());
 
             if (response.statusCode() != 200) {
                 log.error("[Extended] Market stats failed: code={}, body={}",
@@ -705,6 +715,42 @@ public class ExtendedClient {
         } catch (Exception e) {
             log.error("[Extended] Error getting market stats for {}", market, e);
             return null;
+        }
+    }
+
+    public int getMaxLeverage(String market) {
+        try {
+            String url = baseUrl + "/api/v1/info/markets?market=" + market;
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                log.warn("Extended Failed to get market info for {}, HTTP {}", market, response.statusCode());
+                return 20;
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> result = objectMapper.readValue(response.body(), Map.class);
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> dataList = (List<Map<String, Object>>) result.get("data");
+            if (dataList == null || dataList.isEmpty()) return 20;
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> tradingConfig = (Map<String, Object>) dataList.get(0).get("tradingConfig");
+            if (tradingConfig == null) return 20;
+
+            int maxLeverage = (int) Double.parseDouble(tradingConfig.get("maxLeverage").toString());
+            log.info("Extended Max leverage for {} {}x", market, maxLeverage);
+            return maxLeverage;
+
+        } catch (Exception e) {
+            log.error("Extended Error getting max leverage for {}", market, e);
+            return 20;
         }
     }
 
@@ -787,12 +833,13 @@ public class ExtendedClient {
         try {
             double notional = marginUsd * leverage;
 
-            // Get execution price from order book
-            Double executionPrice = estimateExecutionPrice(market, notional / 1000.0, !isBuy);
+            double approxMarkPrice = getMarkPrice(market);
+            double approxSize = (approxMarkPrice > 0) ? notional / approxMarkPrice : 0.01;
+
+            Double executionPrice = estimateExecutionPrice(market, approxSize, !isBuy);
 
             if (executionPrice == null) {
-                // Fallback to mark price
-                executionPrice = getMarkPrice(market);
+                executionPrice = approxMarkPrice;
                 if (executionPrice <= 0) {
                     log.error("[Extended] Failed to get price for {}", market);
                     return null;
@@ -802,6 +849,9 @@ public class ExtendedClient {
             }
 
             double maxSize = notional / executionPrice;
+
+            double stepSize = getStepSize(market);
+            maxSize = roundToStepSize(maxSize, stepSize);
 
             log.info("[Extended] Max size for margin ${} @ {}x: {} {} (price: ${})",
                     String.format("%.2f", marginUsd),

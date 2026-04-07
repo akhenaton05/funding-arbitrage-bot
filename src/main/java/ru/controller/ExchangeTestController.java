@@ -6,8 +6,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import ru.client.aster.AsterClient;
 import ru.client.extended.ExtendedClient;
+import ru.dto.exchanges.Direction;
 import ru.dto.exchanges.aster.AsterTrade;
+import ru.dto.exchanges.extended.ExtendedMarketStats;
 import ru.dto.exchanges.extended.ExtendedPositionHistory;
+import ru.exchanges.Asterdex;
+import ru.exchanges.Extended;
+import ru.exchanges.Lighter;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -22,6 +27,9 @@ public class ExchangeTestController {
 
     private final AsterClient asterClient;
     private final ExtendedClient extendedClient;
+    private final Extended extended;
+    private final Asterdex aster;
+    private final Lighter lighter;
 
     // GET /test/aster/pnl?symbol=BTCUSDT&orderId=123456789
     @GetMapping("/aster/pnl")
@@ -36,6 +44,15 @@ public class ExchangeTestController {
         System.out.println(pnl);
 
         return pnl;
+    }
+
+    // GET /test/extended/position/history?market=4-USD&side=LONG
+    @GetMapping("/extended/market")
+    public ResponseEntity<?> testMaxLeverage(@RequestParam(value = "market") String market) {
+//        ExtendedMarketStats stats = extendedClient.getMarketStats(market);
+        extendedClient.getMaxLeverage(market);
+
+        return ResponseEntity.ok("OK");
     }
 
     // GET /test/extended/position/history?market=4-USD&side=LONG
@@ -71,46 +88,6 @@ public class ExchangeTestController {
 
         return ResponseEntity.ok(response);
     }
-//
-//    @GetMapping("/test/aster/notional")
-//    public ResponseEntity<?> testAsterNotional(
-//            @RequestParam(value = "market") String symbol,
-//            @RequestParam(value = "leverage", defaultValue = "3") int leverage) {
-//
-//        log.info("[Test] Checking Aster notional limits: symbol={}, leverage={}", symbol, leverage);
-//
-//        Map<String, Object> result = new LinkedHashMap<>();
-//        result.put("symbol", symbol);
-//        result.put("timestamp", Instant.now().toString());
-//
-//        // Проверяем несколько leverage для сравнения
-//        for (int lev : new int[]{1, 2, 3, 5, 10, 20}) {
-//            try {
-//                Map<String, Object> limits = asterClient.checkNotionalLimits(symbol, lev);
-//                result.put("leverage_" + lev + "x", limits);
-//                Thread.sleep(200); // чтобы не спамить API
-//            } catch (Exception e) {
-//                result.put("leverage_" + lev + "x_error", e.getMessage());
-//            }
-//        }
-//
-//        return ResponseEntity.ok(result);
-//    }
-//
-//    @GetMapping("/test/aster/position-risk")
-//    public ResponseEntity<String> testAsterPositionRisk(@RequestParam(value = "market") String symbol) {
-//        log.info("[Test] Raw positionRisk for symbol={}", symbol);
-//
-//        String json = asterClient.getRawPositionRisk(symbol);
-//
-//        if (json == null) {
-//            return ResponseEntity.ok("{\"error\": \"No response\"}");
-//        }
-//
-//        return ResponseEntity.ok()
-//                .header("Content-Type", "application/json")
-//                .body(json);
-//    }
 
     @PostMapping("/test/aster/leverage")
     public ResponseEntity<String> testAsterSetLeverage(
@@ -127,6 +104,33 @@ public class ExchangeTestController {
         }
     }
 
+    //Positions Tests
+    // GET /test/extended/position/?market=4-USD&side=LONG
+    @GetMapping("/extended/position")
+    public ResponseEntity<?> getExtendedPosition(@RequestParam(value = "market") String market,
+                                                 @RequestParam(value = "side") Direction side) {
+        log.info("[Controller] Extended position response: {}", extended.getPositions(market, side));
+
+        return ResponseEntity.ok("OK");
+    }
+
+    @GetMapping("/aster/position")
+    public ResponseEntity<?> getAsterPosition(@RequestParam(value = "market") String market,
+                                              @RequestParam(value = "side") Direction side) {
+        log.info("[Controller] Aster position response: {}", aster.getPositions(market, side));
+        log.info("[Controller] Aster entry price: {}", aster.getPositions(market, side).getFirst().getEntryPrice());
+
+        return ResponseEntity.ok("OK");
+    }
+
+    @GetMapping("/lighter/position")
+    public ResponseEntity<?> getLighterPosition(@RequestParam(value = "market") String market,
+                                                @RequestParam(value = "side") Direction side) {
+        log.info("[Controller] Lighter position response: {}", lighter.getPositions(market, side));
+        log.info("[Controller] Lighter entry price: {}", lighter.getPositions(market, side).getFirst().getEntryPrice());
+
+        return ResponseEntity.ok("OK");
+    }
 
 
 

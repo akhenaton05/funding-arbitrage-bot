@@ -20,5 +20,7 @@ public class LighterClosePositionResponse {
     private String note;
 
     @JsonProperty("trade_pnl")
-    private String tradePnl;
+    private double tradePnl;
+    @JsonProperty("exit_price")
+    private double exitPrice;
 }

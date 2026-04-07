@@ -2,6 +2,7 @@ package ru.exchanges;
 
 import ru.dto.exchanges.*;
 import ru.dto.funding.FundingCloseSignal;
+import ru.dto.funding.FundingOpenSignal;
 import ru.dto.funding.PositionPnLData;
 
 import java.util.List;
@@ -56,5 +57,5 @@ public interface Exchange {
 
     PositionRiskControl validatePositionRisk(String symbol, Direction direction);
 
-//    double calculatePnl(FundingCloseSignal signal);
+    boolean isFundingTimeValid(String ticker);
 }

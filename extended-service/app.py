@@ -123,7 +123,6 @@ async def _init_clients():
     blocking = await BlockingTradingClient.create(endpoint_config=MAINNET_CONFIG, account=account)
     logger.info("INIT: BlockingTradingClient ready")
 
-    # warm up markets cache in SDK
     try:
         markets = await blocking.get_markets()
         logger.info("INIT: markets cached in SDK | count=%d", len(markets))
@@ -181,13 +180,35 @@ async def _extended_patch(path: str, json_body: dict):
             data = await safe_json(text)
             return resp.status, data
 
+async def _get_best_price_from_orderbook(market: str, side: OrderSide) -> Decimal | None:
+    """
+    ✅ НОВЫЙ МЕТОД: получает best_ask (для BUY) или best_bid (для SELL) из стакана.
+    Используется для расчёта цены маркет-ордера.
+    """
+    try:
+        status, data = await _extended_get(f"/api/v1/info/markets/{market}/orderbook")
+        if status != 200 or not isinstance(data, dict):
+            return None
+        book = data.get("data", {})
+        if side == OrderSide.BUY:
+            asks = book.get("ask", [])
+            if asks:
+                best_ask = Decimal(str(asks[0]["price"]))
+                logger.info("Orderbook best_ask for %s: %s", market, best_ask)
+                return best_ask
+        else:
+            bids = book.get("bid", [])
+            if bids:
+                best_bid = Decimal(str(bids[0]["price"]))
+                logger.info("Orderbook best_bid for %s: %s", market, best_bid)
+                return best_bid
+    except Exception as e:
+        logger.warning("_get_best_price_from_orderbook failed for %s: %s", market, e)
+    return None
+
 async def _wait_position_closed(market: str, side: str, timeout_sec: float = 10.0) -> bool:
-    """
-    Polling: ждём пока позиция (market, side=LONG/SHORT) закроется (size станет 0 или позиция пропадёт).
-    Возвращает True если закрылась, False если timeout.
-    """
     start = time.time()
-    poll_interval = 0.3  # 300ms
+    poll_interval = 0.3
 
     while time.time() - start < timeout_sec:
         try:
@@ -200,7 +221,6 @@ async def _wait_position_closed(market: str, side: str, timeout_sec: float = 10.
 
             positions = data.get("data", []) if isinstance(data, dict) else []
 
-            # Если позиций нет или size < 0.001 — считаем закрытой
             if not positions:
                 logger.info("_wait_position_closed: %s %s disappeared → CLOSED", market, side)
                 return True
@@ -212,7 +232,6 @@ async def _wait_position_closed(market: str, side: str, timeout_sec: float = 10.
 
             logger.debug("_wait_position_closed: %s %s size=%s still open, polling...", market, side, size)
             await asyncio.sleep(poll_interval)
-
         except Exception as e:
             logger.warning("_wait_position_closed: exception during polling: %s", e)
             await asyncio.sleep(poll_interval)
@@ -220,8 +239,43 @@ async def _wait_position_closed(market: str, side: str, timeout_sec: float = 10.
     logger.warning("_wait_position_closed: TIMEOUT after %.1fs for %s %s", timeout_sec, market, side)
     return False
 
+async def _wait_position_opened(market: str, side: str, timeout_sec: float = 20.0) -> bool:
+    """
+    ✅ НОВЫЙ МЕТОД: polling пока позиция не появится в /positions.
+    Нужен потому что Extended может показывать позицию с задержкой ~15 сек после 202.
+    """
+    start = time.time()
+    attempt = 0
+    poll_interval = 2.0
+
+    while time.time() - start < timeout_sec:
+        attempt += 1
+        try:
+            status, data = await _extended_get(
+                "/api/v1/user/positions",
+                params={"market": market, "side": side}
+            )
+
+            if status == 200 and isinstance(data, dict):
+                positions = data.get("data", [])
+                if positions:
+                    size = Decimal(str(positions[0].get("size", "0")))
+                    if size > Decimal("0"):
+                        logger.info("_wait_position_opened: %s %s FOUND on attempt %d (size=%s)",
+                                    market, side, attempt, size)
+                        return True
+
+            logger.info("_wait_position_opened: %s %s not visible yet (attempt %d), waiting %.1fs...",
+                        market, side, attempt, poll_interval)
+            await asyncio.sleep(poll_interval)
+        except Exception as e:
+            logger.warning("_wait_position_opened: exception on attempt %d: %s", attempt, e)
+            await asyncio.sleep(poll_interval)
+
+    logger.warning("_wait_position_opened: TIMEOUT after %.1fs for %s %s", timeout_sec, market, side)
+    return False
+
 async def _get_market_raw(market: str) -> dict:
-    # simple TTL cache (per market)
     now = time.time()
     cached = _MARKET_CACHE.get(market)
     if cached and now - cached["ts"] < _MARKET_CACHE_TTL_SEC:
@@ -240,18 +294,11 @@ async def get_mark_price(market: str) -> Decimal:
     return Decimal(str(price_str))
 
 async def get_market_precision(market: str) -> tuple[Decimal, Decimal, int, Decimal]:
-    """
-    Returns:
-      tick_size      -> tradingConfig.minPriceChange
-      step_size      -> tradingConfig.minOrderSizeChange
-      asset_precision-> market.assetPrecision
-      min_order_size -> tradingConfig.minOrderSize
-    """
     m = await _get_market_raw(market)
 
     asset_precision = int(m.get("assetPrecision", 2))
     tc = m.get("tradingConfig", {}) or {}
-
+    logger.info("PRECISION RAW tradingConfig for %s: %s", market, tc)  # ← добавить
     tick_size = Decimal(str(tc.get("minPriceChange", "0.1")))
     step_size = Decimal(str(tc.get("minOrderSizeChange", "0.001")))
     min_order_size = Decimal(str(tc.get("minOrderSize", "0.001")))
@@ -316,8 +363,7 @@ async def _place_order_task(external_id: str, market: str, side: OrderSide, size
                 final_status = "placed"
             else:
                 logger.warning("TASK %s LIMIT SDK failed: %s → manual check", external_id, err_str)
-
-        await asyncio.sleep(1.5)
+                await asyncio.sleep(1.5)
 
         if final_status == "checking":
             status, data = await _extended_get("/api/v1/user/orders/open", params={"externalId": external_id})
@@ -347,23 +393,37 @@ async def _place_market_order_task(external_id: str, market: str, side: OrderSid
     try:
         ORDER_TASKS[external_id] = {"status": "running", "started": time.time(), "error": None, "order_id": None}
 
-        mark_price = await get_mark_price(market)
         tick_size, step_size, _, min_order_size = await get_market_precision(market)
 
         if size < min_order_size:
             raise RuntimeError(f"size {size} меньше min_order_size {min_order_size} для {market}")
 
-        # BUY -> +slippage, SELL -> -slippage
-        if side == OrderSide.BUY:
-            price = mark_price * (Decimal("1") + slippage_pct / Decimal("100"))
+        # ✅ ИСПРАВЛЕНИЕ: берём цену из стакана, а не mark_price
+        book_price = await _get_best_price_from_orderbook(market, side)
+
+        if book_price is not None:
+            # BUY: берём best_ask + slippage (гарантированно выше рынка → маркет исполнится)
+            # SELL: берём best_bid - slippage (гарантированно ниже рынка → маркет исполнится)
+            if side == OrderSide.BUY:
+                price = book_price * (Decimal("1") + slippage_pct / Decimal("100"))
+            else:
+                price = book_price * (Decimal("1") - slippage_pct / Decimal("100"))
+            logger.info("TASK %s MARKET price from orderbook: best=%s slippage=%s%% final=%s",
+                        external_id, book_price, slippage_pct, price)
         else:
-            price = mark_price * (Decimal("1") - slippage_pct / Decimal("100"))
+            # fallback на mark_price если стакан недоступен
+            mark_price = await get_mark_price(market)
+            logger.warning("TASK %s MARKET orderbook unavailable, fallback to mark_price=%s", external_id, mark_price)
+            if side == OrderSide.BUY:
+                price = mark_price * (Decimal("1") + slippage_pct / Decimal("100"))
+            else:
+                price = mark_price * (Decimal("1") - slippage_pct / Decimal("100"))
 
         price_decimal = _round_down(price, tick_size)
         size_decimal = _round_down(size, step_size)
 
-        logger.info("TASK %s MARKET placing: market=%s side=%s size=%s price=%s (mark=%s slippage=%s%% tick=%s step=%s)",
-                    external_id, market, side.name, size_decimal, price_decimal, mark_price, slippage_pct, tick_size, step_size)
+        logger.info("TASK %s MARKET placing: market=%s side=%s size=%s price=%s (slippage=%s%% tick=%s step=%s)",
+                    external_id, market, side.name, size_decimal, price_decimal, slippage_pct, tick_size, step_size)
 
         order_id = None
         final_status = "checking"
@@ -419,27 +479,32 @@ async def _place_market_order_task(external_id: str, market: str, side: OrderSid
         ORDER_TASKS[external_id] = {"status": "error", "error": str(e), "order_id": None}
 
 async def _close_position_task(external_id: str, market: str, side: OrderSide, size: Decimal, current_side: str):
-    """
-    Закрывает позицию и ЖДЁТ пока она реально закроется (polling).
-    ОПТИМИЗИРОВАНО: без retry для быстрого закрытия.
-    """
     try:
         ORDER_TASKS[external_id] = {"status": "running", "started": time.time(), "error": None, "order_id": None}
 
-        mark_price = await get_mark_price(market)
         tick_size, step_size, _, min_order_size = await get_market_precision(market)
 
         if size < min_order_size:
             raise RuntimeError(f"size {size} меньше min_order_size {min_order_size} для {market}")
 
-        # Close: LONG -> SELL, SHORT -> BUY
-        # Slippage: для close берём побольше (2%)
         slippage_pct = Decimal("2.0")
 
-        if side == OrderSide.BUY:
-            price = mark_price * (Decimal("1") + slippage_pct / Decimal("100"))
+        # ✅ ИСПРАВЛЕНИЕ: цена закрытия тоже от стакана
+        book_price = await _get_best_price_from_orderbook(market, side)
+        if book_price is not None:
+            if side == OrderSide.BUY:
+                price = book_price * (Decimal("1") + slippage_pct / Decimal("100"))
+            else:
+                price = book_price * (Decimal("1") - slippage_pct / Decimal("100"))
+            logger.info("TASK %s CLOSE price from orderbook: best=%s slippage=%s%% final=%s",
+                        external_id, book_price, slippage_pct, price)
         else:
-            price = mark_price * (Decimal("1") - slippage_pct / Decimal("100"))
+            mark_price = await get_mark_price(market)
+            logger.warning("TASK %s CLOSE orderbook unavailable, fallback to mark_price=%s", external_id, mark_price)
+            if side == OrderSide.BUY:
+                price = mark_price * (Decimal("1") + slippage_pct / Decimal("100"))
+            else:
+                price = mark_price * (Decimal("1") - slippage_pct / Decimal("100"))
 
         price_decimal = _round_down(price, tick_size)
         size_decimal = _round_down(size, step_size)
@@ -451,7 +516,6 @@ async def _close_position_task(external_id: str, market: str, side: OrderSide, s
         final_status = "checking"
 
         try:
-            # ⬇️ ОПТИМИЗАЦИЯ: БЕЗ retry, прямой вызов SDK с коротким timeout
             placed = await asyncio.wait_for(
                 blocking_client.create_and_place_order(
                     market_name=market,
@@ -461,7 +525,7 @@ async def _close_position_task(external_id: str, market: str, side: OrderSide, s
                     post_only=False,
                     external_id=external_id,
                 ),
-                timeout=8.0  # ⬅️ сократили timeout до 8s
+                timeout=8.0
             )
             order_id = str(getattr(placed, "id", "unknown"))
             logger.info("TASK %s CLOSE: SDK returned order_id=%s", external_id, order_id)
@@ -478,16 +542,12 @@ async def _close_position_task(external_id: str, market: str, side: OrderSide, s
                 logger.warning("TASK %s CLOSE SDK failed: %s → skip to validation", external_id, err_str)
                 final_status = "checking"
 
-        # ⬇️ УБРАЛИ await asyncio.sleep(1.0) — не нужен!
-
-        # Manual check если нужно (редко)
         if final_status == "checking":
             status, data = await _extended_get("/api/v1/user/orders/history", params={"externalId": external_id})
             if isinstance(data, dict) and data.get("data"):
                 order_id = str(data["data"][0].get("id", "unknown"))
                 final_status = "filled"
 
-        # ⬇️ КЛЮЧЕВОЙ момент: сразу к polling позиций
         logger.info("TASK %s CLOSE: order status=%s, VALIDATING position closure for %s %s...",
                     external_id, final_status, market, current_side)
 
@@ -588,7 +648,7 @@ def place_market_order():
 def close_position():
     body = request.get_json(force=True) or {}
     market = body.get("market")
-    current_side = str(body.get("current_side")).upper()  # LONG/SHORT
+    current_side = str(body.get("current_side")).upper()
     if not market or not current_side:
         return jsonify({"status": "error", "message": "market and current_side required"}), 400
 
@@ -705,16 +765,38 @@ def get_markets():
 
 @app.route("/positions", methods=["GET"])
 def positions():
+    """
+    ✅ ИСПРАВЛЕНО: добавлен polling для ожидания появления позиции.
+    Параметр wait=true включает ожидание (до 20 сек).
+    """
     market = request.args.get("market")
-    side = request.args.get("side")  # LONG/SHORT
+    side = request.args.get("side")
+    wait = request.args.get("wait", "false").lower() == "true"
+
     try:
         params = {}
         if market:
             params["market"] = market
         if side:
             params["side"] = side.upper()
-        status, data = _submit(_extended_get("/api/v1/user/positions", params), timeout_sec=30)
-        return jsonify(data), status
+
+        if wait and market and side:
+            # Polling режим: ждём появления позиции
+            async def _poll():
+                found = await _wait_position_opened(market, side.upper(), timeout_sec=20.0)
+                # Возвращаем финальный результат
+                s, d = await _extended_get("/api/v1/user/positions", params=params)
+                return s, d, found
+
+            status, data, found = _submit(_poll(), timeout_sec=25)
+            if isinstance(data, dict):
+                data["_waited"] = True
+                data["_found"] = found
+            return jsonify(data), status
+        else:
+            status, data = _submit(_extended_get("/api/v1/user/positions", params), timeout_sec=30)
+            return jsonify(data), status
+
     except Exception as e:
         logger.exception("positions failed")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -792,10 +874,6 @@ def get_markets_info_proxy():
 
 @app.route("/funding/history", methods=["GET"])
 def get_funding_history():
-    """
-    GET /funding/history?market=BTC-USD&side=LONG&fromTime=1234567890000&limit=100
-    Возвращает историю фандинга для позиции
-    """
     market = request.args.get("market")
     side = request.args.get("side")
     from_time = request.args.get("fromTime")
@@ -820,8 +898,6 @@ def get_funding_history():
 
         if status == 200 and isinstance(data, dict) and data.get("data"):
             payments = data.get("data", [])
-
-            #ФИЛЬТРУЕМ платежи по paidTime >= fromTime
             from_time_ms = int(from_time) if from_time else 0
             filtered_payments = [
                 p for p in payments
@@ -831,7 +907,6 @@ def get_funding_history():
             total_received = 0.0
             total_paid = 0.0
 
-            #Считаем только отфильтрованные платежи
             for payment in filtered_payments:
                 fee = float(payment.get("fundingFee", 0))
                 if fee > 0:
@@ -839,7 +914,6 @@ def get_funding_history():
                 else:
                     total_paid += abs(fee)
 
-            # Добавляем summary в ответ
             data["summary"] = {
                 "total_received": total_received,
                 "total_paid": total_paid,
@@ -857,13 +931,8 @@ def get_funding_history():
         logger.exception("get_funding_history failed")
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
-
 @app.route("/api/v1/info/markets/<market>/orderbook", methods=["GET"])
 def get_order_book(market: str):
-    """
-    GET /api/v1/info/markets/BERA-USD/orderbook
-    Возвращает order book с bid/ask levels
-    """
     try:
         status, data = _submit(
             _extended_get(f"/api/v1/info/markets/{market}/orderbook"),
@@ -883,10 +952,6 @@ def get_order_book(market: str):
 
 @app.route("/api/v1/info/markets/<market>/stats", methods=["GET"])
 def get_market_stats(market: str):
-    """
-    GET /api/v1/info/markets/BERA-USD/stats
-    Возвращает статистику рынка включая bid/ask/mark prices
-    """
     try:
         status, data = _submit(
             _extended_get(f"/api/v1/info/markets/{market}/stats"),
@@ -908,10 +973,6 @@ def get_market_stats(market: str):
 
 @app.route("/api/v1/info/markets/<market>/trades", methods=["GET"])
 def get_recent_trades(market: str):
-    """
-    GET /api/v1/info/markets/BERA-USD/trades
-    Возвращает последние сделки на рынке
-    """
     try:
         status, data = _submit(
             _extended_get(f"/api/v1/info/markets/{market}/trades"),
@@ -927,24 +988,16 @@ def get_recent_trades(market: str):
         logger.exception("get_recent_trades failed")
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
-
 @app.route("/market/<market>/execution-price", methods=["POST"])
 def estimate_execution_price(market: str):
-    """
-    POST /market/BERA-USD/execution-price
-    Body: {"size": "271", "side": "SELL"}
-
-    Рассчитывает ожидаемую цену исполнения на основе order book
-    """
     try:
         body = request.get_json(force=True) or {}
         size = Decimal(str(body.get("size", "0")))
-        side = str(body.get("side", "BUY")).upper()  # BUY/SELL
+        side = str(body.get("side", "BUY")).upper()
 
         if size <= 0:
             return jsonify({"status": "ERROR", "message": "invalid size"}), 400
 
-        # Получаем order book
         status, book_data = _submit(
             _extended_get(f"/api/v1/info/markets/{market}/orderbook"),
             timeout_sec=10
@@ -954,14 +1007,11 @@ def estimate_execution_price(market: str):
             return jsonify({"status": "ERROR", "message": "failed to get order book"}), status
 
         book = book_data.get("data", {})
-
-        # Берём нужную сторону: SELL -> bid, BUY -> ask
         levels = book.get("bid" if side == "SELL" else "ask", [])
 
         if not levels:
             return jsonify({"status": "ERROR", "message": "no liquidity"}), 404
 
-        # Рассчитываем средневзвешенную цену
         remaining = size
         total_cost = Decimal("0")
         filled_qty = Decimal("0")
@@ -982,8 +1032,6 @@ def estimate_execution_price(market: str):
             return jsonify({"status": "ERROR", "message": "insufficient liquidity"}), 400
 
         avg_price = total_cost / filled_qty
-
-        # Если не хватило ликвидности
         insufficient = remaining > Decimal("0")
 
         result = {
@@ -1008,7 +1056,6 @@ def estimate_execution_price(market: str):
         logger.exception("estimate_execution_price failed")
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
-
 @app.route('/positions/history', methods=['GET'])
 def get_positions_history():
     market = request.args.get('market')
@@ -1028,6 +1075,7 @@ def get_positions_history():
     except Exception as e:
         logger.exception("get_positions_history failed")
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 
 if __name__ == "__main__":

@@ -9,7 +9,11 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
+import ru.config.ProxyConfig;
 import ru.service.TelegramChatService;
+
+import java.net.Authenticator;
+import java.net.PasswordAuthentication;
 
 @Slf4j
 @EnableScheduling
@@ -19,6 +23,20 @@ public class FundingApplication {
 
     public static void main(String[] args) {
         ApplicationContext context = SpringApplication.run(FundingApplication.class, args);
+
+        ProxyConfig proxyConfig = context.getBean(ProxyConfig.class);
+
+        System.setProperty("java.net.socks.username", proxyConfig.getUsername());
+        System.setProperty("java.net.socks.password", proxyConfig.getPassword());
+
+        // Authenticator for SOCKS5
+        Authenticator.setDefault(new Authenticator() {
+            @Override
+            protected PasswordAuthentication getPasswordAuthentication() {
+                return new PasswordAuthentication(proxyConfig.getUsername(), proxyConfig.getPassword().toCharArray());
+            }
+        });
+
         TelegramChatService telegramService = context.getBean(TelegramChatService.class);
 
         try {

@@ -11,11 +11,11 @@ public class ExtendedPositionHistory {
     private String market;
     private String side;
     private String leverage;
-    private String size;
-    private String openPrice;
-    private String exitPrice;
+    private Double size;
+    private Double openPrice;
+    private Double exitPrice;
     private String exitType;
-    private String realisedPnl;
+    private Double realisedPnl;
     private RealisedPnlBreakdown realisedPnlBreakdown;
     private String maxPositionSize;
     private Long createdTime;
@@ -24,9 +24,9 @@ public class ExtendedPositionHistory {
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class RealisedPnlBreakdown {
-        private String tradePnl;
-        private String openFees;
-        private String closeFees;
-        private String fundingFees;
+        private Double tradePnl;
+        private Double openFees;
+        private Double closeFees;
+        private Double fundingFees;
     }
 }

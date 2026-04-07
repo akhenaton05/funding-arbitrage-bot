@@ -59,7 +59,7 @@ KNOWN_MAX_LEVERAGE: dict[str, int] = {
     "LINK": 10, "AAVE": 10, "MKR": 10, "CRV": 10,
     "DOT": 10, "ALGO": 10, "FTM": 10, "ICP": 10,
     "NMR": 8, "COIN": 8, "LDO": 8,
-    "MEGA": 5, "PEPE": 5, "BONK": 5, "SHIB": 5,
+    "MEGA": 3, "PEPE": 5, "BONK": 5, "SHIB": 5,
     "PIPPIN": 3, "DEGEN": 3, "FLOKI": 3, "RIVER": 3,
     "ARC": 3, "ZORA": 3, "STABLE": 3, "MYX": 3,
     "VVV": 3, "USELESS": 3, "AERO": 3, "SKR": 3,
@@ -632,12 +632,19 @@ async def get_positions():
                 else:
                     logger.info(f"   ⚠️ Filtered position with size=0: {symbol} {position_side}")
 
+            # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+            pos_value = float(getattr(pos, 'position_value', 0) or 0)
+            implied_mark = pos_value / position_size if position_size > 0 else 0.0
+            logger.info(f"   📊 Implied mark price for {symbol}: ${implied_mark:.6f} "
+                f"(pos_value={pos_value}, size={position_size})")
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
             formatted.append({
                 "market": symbol,
                 "side": position_side,
                 "size": str(position_size),
                 "open_price": str(getattr(pos, 'avg_entry_price', 0) or 0),
-                "mark_price": None,
+                "mark_price": str(round(implied_mark, 6)),
                 "position_value": str(getattr(pos, 'position_value', 0) or 0),
                 "unrealised_pnl": str(getattr(pos, 'unrealized_pnl', 0) or 0),
                 "realized_pnl": str(getattr(pos, 'realized_pnl', 0) or 0),

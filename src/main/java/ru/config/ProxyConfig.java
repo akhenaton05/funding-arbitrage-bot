@@ -13,6 +13,7 @@ import org.apache.hc.core5.util.Timeout;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.telegram.telegrambots.bots.DefaultBotOptions;
 
 import java.util.concurrent.TimeUnit;
 
@@ -56,5 +57,14 @@ public class ProxyConfig {
         }
 
         return clientBuilder.build();
+    }
+
+    @Bean
+    public DefaultBotOptions telegramBotOptions() {
+        DefaultBotOptions options = new DefaultBotOptions();
+        options.setProxyHost("141.11.162.187");
+        options.setProxyPort(47383); // ← SOCKS5 порт
+        options.setProxyType(DefaultBotOptions.ProxyType.SOCKS5);
+        return options;
     }
 }

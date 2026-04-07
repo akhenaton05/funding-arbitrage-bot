@@ -14,4 +14,16 @@ public enum ExchangeType {
     public String getDisplayName() {
         return displayName;
     }
+
+    public static String abbreviate(String exchangeName) {
+        if (exchangeName == null) return "???";
+        return switch (exchangeName.toLowerCase()) {
+            case "aster", "asterdex"  -> "Ast";
+            case "lighter"            -> "Lit";
+            case "extended"           -> "Ext";
+            default -> exchangeName.length() > 4
+                    ? exchangeName.substring(0, 4)
+                    : exchangeName;
+        };
+    }
 }

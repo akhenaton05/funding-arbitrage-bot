@@ -14,4 +14,5 @@ public class OrderResult {
     private String errorCode;
     private Long timestamp;
     private Double realizedPnl;
+    private Double exitPrice;
 }

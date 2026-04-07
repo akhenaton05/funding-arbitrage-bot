@@ -343,9 +343,10 @@ public class LighterClient {
                     .symbol(market)
                     .success(true)
                     .orderId(dto.getTxHash())
-                    .message("Position closed")
+                    .message(dto.getMessage())
                     .timestamp(System.currentTimeMillis())
-                    .realizedPnl(Double.valueOf(dto.getTradePnl()))
+                    .realizedPnl(dto.getTradePnl())
+                    .exitPrice(dto.getExitPrice())
                     .build();
         }
 

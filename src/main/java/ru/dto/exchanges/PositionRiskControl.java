@@ -6,6 +6,7 @@ import lombok.Data;
 @Data
 @Builder
 public class PositionRiskControl {
+    private double entryPrice;
     private double markPrice;
     private double liquidationPrice;
 }

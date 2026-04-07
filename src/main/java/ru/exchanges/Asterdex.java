@@ -10,6 +10,7 @@ import ru.dto.exchanges.aster.*;
 import ru.dto.funding.FundingCloseSignal;
 import ru.exceptions.ClosingPositionException;
 import ru.exceptions.OpeningPositionException;
+import ru.exceptions.aster.AsterApiException;
 import ru.mapper.aster.AsterOrderBookMapper;
 import ru.mapper.aster.AsterPositionMapper;
 
@@ -150,6 +151,7 @@ public class Asterdex implements Exchange {
             double totalFee = (Double.parseDouble(tradeResult.getCommission()) * 2.0);
 
             result.setRealizedPnl(Double.parseDouble(tradeResult.getRealizedPnl()) - totalFee);
+            result.setExitPrice(tradeResult.getPrice());
 
             return result;
 
@@ -252,16 +254,6 @@ public class Asterdex implements Exchange {
             String symbol = formatSymbol(ticker);
 
             PremiumIndexResponse premium = asterClient.getPremiumIndexInfo(symbol);
-            if (premium == null) {
-                log.warn("[Aster] Failed to get premium index for {}", symbol);
-                return prevFunding;
-            }
-
-            long minutesUntilFunding = premium.getMinutesUntilFunding();
-            if (minutesUntilFunding > 10) {
-                log.debug("[Aster] Funding too far: {} min", minutesUntilFunding);
-                return prevFunding;
-            }
 
             List<Position> positions = getPositions(ticker, direction);
             if (positions.isEmpty()) {
@@ -288,8 +280,21 @@ public class Asterdex implements Exchange {
                     String.format("%.2f", notional),
                     String.format("%.4f", fundingPnl));
 
+            double realFunding = asterClient.getAccumulatedFundingFee(symbol, signal.getOpenedAtMs());
+
+            log.info("[Asterdex] Funding comparison: symbol={}, direction={}, " +
+                            "calculated={}, realFromAPI={}, diff={}",
+                    symbol,
+                    direction,
+                    String.format("%.6f", fundingPnl + prevFunding),
+                    String.format("%.6f", realFunding),
+                    String.format("%.6f", realFunding - (fundingPnl + prevFunding)));
+
             return fundingPnl + prevFunding;
 
+        } catch (AsterApiException e) {
+            log.error("[Aster] AsterApiError calculating funding: {}", e.getMessage());
+            throw e;
         } catch (Exception e) {
             log.error("[Aster] Error calculating funding for {} {}: {}",
                     ticker, direction, e.getMessage());
@@ -336,11 +341,19 @@ public class Asterdex implements Exchange {
     public PositionRiskControl validatePositionRisk(String ticker, Direction direction) {
         //Aster returns data from position request
         List<Position> positions = getPositions(ticker, direction);
+        log.info("[Aster] PositionRisk position: {}", positions);
         log.info("[Aster] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), positions.getFirst().getMarkPrice());
 
         return PositionRiskControl.builder()
+                .entryPrice(positions.getFirst().getEntryPrice())
                 .liquidationPrice(positions.getFirst().getLiquidationPrice())
                 .markPrice(positions.getFirst().getMarkPrice())
                 .build();
+    }
+
+    @Override
+    public boolean isFundingTimeValid(String ticker) {
+        long minutes = getMinutesUntilFunding(ticker);
+        return minutes <= 60;
     }
 }

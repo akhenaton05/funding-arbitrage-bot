@@ -11,7 +11,7 @@ public class AsterTrade {
     private String symbol;
     private String side;
     private String positionSide;
-    private String price;
+    private Double price;
     private String qty;
     private String quoteQty;
     private String commission;

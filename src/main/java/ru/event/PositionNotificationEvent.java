@@ -8,6 +8,7 @@ import ru.dto.funding.PositionPnLData;
 @Builder
 public class PositionNotificationEvent {
     private final String positionId;
+    private final String header;
     private final String ticker;
     private final String message;
 }

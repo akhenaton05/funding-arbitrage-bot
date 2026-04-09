@@ -175,7 +175,7 @@ public class ExchangesService {
             validatePositionRisk(signal);
 
             try {
-                boolean isLiquidated= checkOpenedPositions(signal);
+                boolean isLiquidated = checkOpenedPositions(signal);
 
                 if (isLiquidated) {
                     toRemove.add(signal.getId());
@@ -1079,12 +1079,15 @@ public class ExchangesService {
 
             if (progressToLiq >= warnThr) {
                 String level = progressToLiq >= critThr ? "Critical" : "Warning";
+                String header = String.format("Liquidation risk on %s for ticker $%s",
+                        snapshot.getExchangeType().getDisplayName(), signal.getTicker());
+
                 String msg = String.format(
-                        "%s: Liquidation risk on %s $%s: %.1f%% progress to liq " +
-                                "(entry=%.6f, mark=%.6f, liq=%.6f)",
-                        level, snapshot.getExchangeType().getDisplayName(), signal.getTicker(), progressToLiq, entry, mark, liq
+                        "Entry=%.5f, Mark=%.5f, Liq=%.5f)",
+                        entry, mark, liq
                 );
                 eventPublisher.publishEvent(PositionNotificationEvent.builder()
+                        .header(header)
                         .message(msg)
                         .positionId(signal.getId())
                         .ticker(signal.getTicker())
@@ -1329,6 +1332,81 @@ public class ExchangesService {
             log.info("  Total Slippage Impact: ${}",
                     String.format("%.2f", firstSlippageImpact + secondSlippageImpact));
             log.info("  Net P&L:       ${}", String.format("%.2f", pnlData.getNetPnl()));
+
+            //Exit analytics
+
+            // 1. Exit cost per exchange (% of mark price, in bps)
+            double firstExitCostBps = 0.0;
+            double secondExitCostBps = 0.0;
+
+            if (firstMarkPrice > 0) {
+                // SHORT on first → ASK → (ask - mark) / mark
+                // LONG  on first → BID →  (mark - bid) / mark
+                double firstExitPrice = firstEffectivePrice;
+                firstExitCostBps = isFirstLong
+                        ? (firstMarkPrice - firstExitPrice) / firstMarkPrice * 10000
+                        : (firstExitPrice - firstMarkPrice) / firstMarkPrice * 10000;
+            }
+
+            if (secondMarkPrice > 0) {
+                double secondExitPrice = secondEffectivePrice;
+                secondExitCostBps = isSecondLong
+                        ? (secondMarkPrice - secondExitPrice) / secondMarkPrice * 10000
+                        : (secondExitPrice - secondMarkPrice) / secondMarkPrice * 10000;
+            }
+
+            double totalExitCostBps = firstExitCostBps + secondExitCostBps;
+
+            // 2. Exchange price spread
+            double exchangePriceSpreadBps = 0.0;
+            if (firstMarkPrice > 0 && secondMarkPrice > 0) {
+                exchangePriceSpreadBps = Math.abs(firstMarkPrice - secondMarkPrice) /
+                        Math.min(firstMarkPrice, secondMarkPrice) * 10000;
+            }
+
+            // 3. Funding rate delta
+            ArbitrageRates currentRates = getCurrentSpread(signal);
+            double currentFundingRate = Objects.nonNull(currentRates)
+                    ? currentRates.getArbitrageRate()
+                    : signal.getOpenedFundingRate();
+            double fundingRateDelta = currentFundingRate - signal.getOpenedFundingRate();
+            double fundingRateDeltaPct = signal.getOpenedFundingRate() > 0
+                    ? (fundingRateDelta / signal.getOpenedFundingRate()) * 100
+                    : 0.0;
+
+            // 4. Exit readiness score
+            String exitReadiness;
+            String exitAdvice;
+            if (totalExitCostBps < 80 && fundingRateDelta < -0.05) {
+                exitReadiness = "🟢 Good Exit";
+                exitAdvice = "OrderBook narrow + rate down — can close";
+            } else if (totalExitCostBps < 80) {
+                exitReadiness = "🟡 Cheap Exit";
+                exitAdvice = "OrderBook narrow, rate the same — can hold";
+            } else if (fundingRateDelta < -0.1) {
+                exitReadiness = "🟡 Rate dropped";
+                exitAdvice = "OrderBook wide + rate down, wait till OrderBook narrowing";
+            } else if (totalExitCostBps > 200) {
+                exitReadiness = "🔴 Hold";
+                exitAdvice = "OrderBook wide, exit expensive — hold";
+            } else {
+                exitReadiness = "⚪ Neutral";
+                exitAdvice = "Base contditions";
+            }
+
+            log.info("  Exit Analytics:");
+            log.info("  Exit cost {}: {} bps", ex1.getName(), String.format("%.1f", firstExitCostBps));
+            log.info("  Exit cost {}: {} bps", ex2.getName(), String.format("%.1f", secondExitCostBps));
+            log.info("  Total exit cost: {} bps", String.format("%.1f", totalExitCostBps));
+            log.info("  Exchange price spread: {} bps", String.format("%.1f", exchangePriceSpreadBps));
+            log.info("  Funding rate: entry={}%, current={}%, delta={}{}% ({}{}%)",
+                    String.format("%.4f", signal.getOpenedFundingRate()),
+                    String.format("%.4f", currentFundingRate),
+                    fundingRateDelta >= 0 ? "+" : "",
+                    String.format("%.4f",Math.abs(fundingRateDelta)),
+                    fundingRateDeltaPct >= 0 ? "+" : "",
+                    String.format("%.4f",Math.abs(fundingRateDeltaPct)));
+            log.info("  Exit readiness: {} — {}", exitReadiness, exitAdvice);
 
             return pnlData;
 

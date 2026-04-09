@@ -11,6 +11,7 @@ import org.telegram.telegrambots.meta.api.methods.ActionType;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.send.SendChatAction;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.updatingmessages.DeleteMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
 import org.telegram.telegrambots.meta.api.objects.*;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
@@ -30,6 +31,9 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -40,6 +44,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
     private final FundingArbitrageService fundingService;
     private final ExchangesService exchangesService;
     private final TradeHistoryService tradeHistoryService;
+    private final ScheduledExecutorService deleteScheduler =
+            Executors.newSingleThreadScheduledExecutor();
 
     private final Map<String, Integer> positionMessageIds = new ConcurrentHashMap<>();
 
@@ -148,7 +154,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
             result.append("```");
 
-            sendMessage(chatId, result.toString());
+            sendMessageAndScheduleDelete(chatId, result.toString(), 4);
 
         } catch (Exception e) {
             sendMessage(chatId, "❌ Error getting data");
@@ -288,32 +294,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
     @Async
     public void handleFundingAlert(FundingAlertEvent event) {
         log.info("[Telegram] Received funding alert event for chat {}", event.getChatId());
-        sendMessage(event.getChatId(), formatAlert(event.getMessage()));
+        sendMessageAndScheduleDelete (event.getChatId(), formatAlert(event.getMessage()), 6);
     }
-
-//    @EventListener
-//    @Async
-//    public void handlePositionOpened(PositionOpenedEvent event) {
-//        log.info("[Telegram] Position opened event for {}", event.getTicker());
-//
-//        String message = formatPositionOpenedMessage(event);
-//
-//        for (Long chatId : fundingContext.getSubscriberIds()) {
-//            sendMessage(chatId, message);
-//        }
-//    }
-
-//    @EventListener
-//    @Async
-//    public void handlePositionClosed(PositionClosedEvent event) {
-//        log.info("[Telegram] Position closed event for {}", event.getTicker());
-//
-//        String message = formatPositionClosedMessage(event);
-//
-//        for (Long chatId : fundingContext.getSubscriberIds()) {
-//            sendMessage(chatId, message);
-//        }
-//    }
 
     @EventListener
     @Async
@@ -325,7 +307,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String message = formatPnLThresholdMessage(event);
 
         for (Long chatId : fundingContext.getSubscriberIds()) {
-            sendMessage(chatId, message);
+            sendMessageAndScheduleDelete (chatId, message, 5);
         }
     }
 
@@ -515,9 +497,11 @@ public class TelegramChatService extends TelegramLongPollingBot {
         return String.format(
                 "🤖 *FundingBot:* Position `%s` Update \uD83D\uDCCC\n\n" +
                         "*Ticker:* %s\n" +
+                        "*Notification:* %s\n"+
                         "*Message:* %s\n",
                 event.getPositionId(),
                 event.getTicker(),
+                event.getHeader(),
                 event.getMessage()
         );
     }
@@ -542,8 +526,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String grossSign = pnl.getGrossPnl() >= 0 ? "+" : "";
 
         return String.format(
-                "🤖 *[FundingBot]:* Position %s %s \uD83D\uDDFF\n\n" +
-                        "*Info:*\n" +
+                "🤖 *[FundingBot]:* Position `%s` \uD83D\uDDFF\n\n" +
+                        "\uD83D\uDCBC *Info:*\n" +
                         "Ticker: %s | Margin: %.2f$ \n" +
                         "Holdtime: %s | Rate: %.2f→%.2f\n\n" +
                         "\uD83D\uDCCA *Position:*\n" +
@@ -575,8 +559,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     private String formatPrice(double price) {
         if (price >= 1000) return String.format("%.1f", price);
-        if (price >= 1) return String.format("%.3f", price);
-        if (price >= 0.01) return String.format("%.4f", price);
+        if (price >= 1) return String.format("%.4f", price);
+        if (price >= 0.01) return String.format("%.5f", price);
         return String.format("%.6f", price);
     }
 
@@ -672,46 +656,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         return sb.toString();
     }
-//
-//    private String formatPositionOpenedMessage(PositionOpenedEvent event) {
-//        if (!event.isSuccess()) {
-//            if (event.getResult() != null &&
-//                    event.getResult().contains("No balance available to open position")) {
-//                return "🤖 *FundingBot:* No margin available to open position";
-//            } else if (event.getResult() != null &&
-//                    event.getResult().contains("More than an hour until funding, position not opened")) {
-//                return "🤖 *FundingBot:* Funding payment in more than an hour, position wasn't opened";
-//            }
-//
-//            return String.format(
-//                    "🤖 *FundingBot:* Position Opening Failed ❌\n\n" +
-//                            "*ID:* `%s`\n" +
-//                            "*Mode:* %s\n" +
-//                            "*Ticker:* %s\n" +
-//                            "*Error:* %s\n",
-//                    event.getPositionId(),
-//                    event.getMode(),
-//                    event.getTicker(),
-//                    event.getResult()
-//            );
-//        }
-//
-//        return String.format(
-//                "🤖 *FundingBot:* Position Opened ✅\n\n" +
-//                        "*ID:* `%s`\n" +
-//                        "*Mode:* %s\n" +
-//                        "*Ticker:* %s\n" +
-//                        "*Margin Used:* %.2f USD\n" +
-//                        "*Open:* %s\n" +
-//                        "*Funding Rate:* %.2f%%\n",
-//                event.getPositionId(),
-//                event.getMode(),
-//                event.getTicker(),
-//                event.getBalanceUsed(),
-//                event.getOpenInfo(),
-//                event.getRate()
-//        );
-//    }
 
     private String formatAlert(ArbitrageRates rate) {
         return String.format("🚨 *High Arbitrage Alert* 🚨\n\n" +
@@ -954,5 +898,34 @@ public class TelegramChatService extends TelegramLongPollingBot {
                 entrySpread,
                 exitSpread
         );
+    }
+
+    // Метод sendMessageAndScheduleDelete:
+    public void sendMessageAndScheduleDelete(Long chatId, String text, long delayMinutes) {
+        sendTypingAction(chatId);
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(text);
+        message.setParseMode("Markdown");
+        try {
+            Integer messageId = execute(message).getMessageId();
+            deleteScheduler.schedule(() -> deleteMessage(chatId, messageId),
+                    delayMinutes, TimeUnit.MINUTES);
+        } catch (TelegramApiException e) {
+            log.error("Telegram Failed to send message to chat {}", chatId, e);
+        }
+    }
+
+    // Метод удаления:
+    private void deleteMessage(Long chatId, Integer messageId) {
+        try {
+            DeleteMessage delete = new DeleteMessage();
+            delete.setChatId(chatId);
+            delete.setMessageId(messageId);
+            execute(delete);
+            log.info("Telegram Deleted message {} in chat {}", messageId, chatId);
+        } catch (TelegramApiException e) {
+            log.warn("Telegram Failed to delete message {}: {}", messageId, e.getMessage());
+        }
     }
 }

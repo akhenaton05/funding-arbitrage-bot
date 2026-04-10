@@ -116,14 +116,18 @@ public class ExchangesService {
             if (Objects.isNull(currentRate)) continue;
 
             if (isRateFlipped(pos, currentRate)) {
+                String header = String.format("Funding rate flipped for %s!",
+                        pos.getTicker()
+                );
                 String message = String.format(
-                        "[FundingBot] Funding rate flipped for %s! Current spread: %.2f%%",
-                        pos.getTicker(), currentRate.getArbitrageRate()
+                        "Current spread: %.2f%%",
+                        currentRate.getArbitrageRate()
                 );
                 log.info("[FundingBot] {}", message);
                 eventPublisher.publishEvent(PositionNotificationEvent.builder()
                         .positionId(pos.getId())
                         .ticker(pos.getTicker())
+                        .header(header)
                         .message(message)
                         .build()
                 );
@@ -1333,26 +1337,22 @@ public class ExchangesService {
                     String.format("%.2f", firstSlippageImpact + secondSlippageImpact));
             log.info("  Net P&L:       ${}", String.format("%.2f", pnlData.getNetPnl()));
 
-            //Exit analytics
+            // ── Exit Analytics ───────────────────────────────────────────────────────────
 
-            // 1. Exit cost per exchange (% of mark price, in bps)
+            // 1. Exit cost per exchange (bps from mark)
             double firstExitCostBps = 0.0;
             double secondExitCostBps = 0.0;
 
             if (firstMarkPrice > 0) {
-                // SHORT on first → ASK → (ask - mark) / mark
-                // LONG  on first → BID →  (mark - bid) / mark
-                double firstExitPrice = firstEffectivePrice;
                 firstExitCostBps = isFirstLong
-                        ? (firstMarkPrice - firstExitPrice) / firstMarkPrice * 10000
-                        : (firstExitPrice - firstMarkPrice) / firstMarkPrice * 10000;
+                        ? (firstMarkPrice - firstEffectivePrice) / firstMarkPrice * 10_000
+                        : (firstEffectivePrice - firstMarkPrice) / firstMarkPrice * 10_000;
             }
 
             if (secondMarkPrice > 0) {
-                double secondExitPrice = secondEffectivePrice;
                 secondExitCostBps = isSecondLong
-                        ? (secondMarkPrice - secondExitPrice) / secondMarkPrice * 10000
-                        : (secondExitPrice - secondMarkPrice) / secondMarkPrice * 10000;
+                        ? (secondMarkPrice - secondEffectivePrice) / secondMarkPrice * 10_000
+                        : (secondEffectivePrice - secondMarkPrice) / secondMarkPrice * 10_000;
             }
 
             double totalExitCostBps = firstExitCostBps + secondExitCostBps;
@@ -1360,53 +1360,96 @@ public class ExchangesService {
             // 2. Exchange price spread
             double exchangePriceSpreadBps = 0.0;
             if (firstMarkPrice > 0 && secondMarkPrice > 0) {
-                exchangePriceSpreadBps = Math.abs(firstMarkPrice - secondMarkPrice) /
-                        Math.min(firstMarkPrice, secondMarkPrice) * 10000;
+                exchangePriceSpreadBps = Math.abs(firstMarkPrice - secondMarkPrice)
+                        / Math.min(firstMarkPrice, secondMarkPrice) * 10_000;
             }
 
-            // 3. Funding rate delta
+            // 3. Slippage vs Funding ratio
+            double totalSlippageImpact = firstSlippageImpact + secondSlippageImpact;
+            double fundingNet = pnlData.getTotalFundingNet();
+            double slippageToFunding = fundingNet > 0
+                    ? Math.abs(totalSlippageImpact) / fundingNet * 100
+                    : 0.0;
+
+            // 4. ROI по notional
+            double avgNotional = ((firstSize * firstMarkPrice) + (secondSize * secondMarkPrice)) / 2;
+            double netRoiPct = avgNotional > 0 ? pnlData.getNetPnl() / avgNotional * 100 : 0.0;
+
+            // 5. Funding rate delta
             ArbitrageRates currentRates = getCurrentSpread(signal);
             double currentFundingRate = Objects.nonNull(currentRates)
                     ? currentRates.getArbitrageRate()
                     : signal.getOpenedFundingRate();
             double fundingRateDelta = currentFundingRate - signal.getOpenedFundingRate();
-            double fundingRateDeltaPct = signal.getOpenedFundingRate() > 0
-                    ? (fundingRateDelta / signal.getOpenedFundingRate()) * 100
+            double fundingRateDeltaPct = signal.getOpenedFundingRate() != 0
+                    ? fundingRateDelta / signal.getOpenedFundingRate() * 100
                     : 0.0;
 
-            // 4. Exit readiness score
+            // 6. Exit readiness
+            boolean exitCheap = totalExitCostBps < 80;
+            boolean rateDeclined = fundingRateDelta < -0.05;
+            boolean bookVeryExpensive = totalExitCostBps > 200;
+            boolean slippageEatsAll = slippageToFunding > 80;
+
             String exitReadiness;
             String exitAdvice;
-            if (totalExitCostBps < 80 && fundingRateDelta < -0.05) {
-                exitReadiness = "🟢 Good Exit";
-                exitAdvice = "OrderBook narrow + rate down — can close";
-            } else if (totalExitCostBps < 80) {
-                exitReadiness = "🟡 Cheap Exit";
-                exitAdvice = "OrderBook narrow, rate the same — can hold";
-            } else if (fundingRateDelta < -0.1) {
-                exitReadiness = "🟡 Rate dropped";
-                exitAdvice = "OrderBook wide + rate down, wait till OrderBook narrowing";
-            } else if (totalExitCostBps > 200) {
-                exitReadiness = "🔴 Hold";
-                exitAdvice = "OrderBook wide, exit expensive — hold";
+
+            if (exitCheap && rateDeclined) {
+                exitReadiness = "🟢 CLOSE NOW";
+                exitAdvice = "Exit cheap + rate falling — optimal window";
+            } else if (exitCheap && !slippageEatsAll) {
+                exitReadiness = "🟡 CAN CLOSE";
+                exitAdvice = "Exit cheap, rate stable — acceptable";
+            } else if (exitCheap && slippageEatsAll) {
+                exitReadiness = "🟡 SLIP RISK";
+                exitAdvice = String.format("Exit cheap but slippage eats %.0f%% of funding — monitor", slippageToFunding);
+            } else if (!exitCheap && rateDeclined) {
+                exitReadiness = "🟡 RATE DROP";
+                exitAdvice = "Rate falling but book wide — wait for spread to narrow";
+            } else if (bookVeryExpensive) {
+                exitReadiness = "🔴 HOLD";
+                exitAdvice = String.format("Book too wide (%.0f bps) — hold", totalExitCostBps);
             } else {
-                exitReadiness = "⚪ Neutral";
-                exitAdvice = "Base contditions";
+                exitReadiness = "⚪ NEUTRAL";
+                exitAdvice = "No strong signal";
             }
 
-            log.info("  Exit Analytics:");
-            log.info("  Exit cost {}: {} bps", ex1.getName(), String.format("%.1f", firstExitCostBps));
-            log.info("  Exit cost {}: {} bps", ex2.getName(), String.format("%.1f", secondExitCostBps));
-            log.info("  Total exit cost: {} bps", String.format("%.1f", totalExitCostBps));
-            log.info("  Exchange price spread: {} bps", String.format("%.1f", exchangePriceSpreadBps));
-            log.info("  Funding rate: entry={}%, current={}%, delta={}{}% ({}{}%)",
-                    String.format("%.4f", signal.getOpenedFundingRate()),
-                    String.format("%.4f", currentFundingRate),
-                    fundingRateDelta >= 0 ? "+" : "",
-                    String.format("%.4f",Math.abs(fundingRateDelta)),
-                    fundingRateDeltaPct >= 0 ? "+" : "",
-                    String.format("%.4f",Math.abs(fundingRateDeltaPct)));
-            log.info("  Exit readiness: {} — {}", exitReadiness, exitAdvice);
+            // 7. Summary log
+            log.info("""
+                            [FundingBot] ══════ P&L Summary: {} ══════
+                              {}: ${} ({})
+                              {}: ${} ({})
+                              ───────────────────────────────────────
+                              Gross P&L:   ${}   Funding:    ${}
+                              Open Fees:   ${}   Close Fees: ${}
+                              Slippage:    ${} ({}% of funding)
+                              Net P&L:     ${}   ROI: {}%
+                              ───────────────────────────────────────
+                              Exit cost {}: {} bps
+                              Exit cost {}: {} bps
+                              Total exit cost:  {} bps
+                              Exchange spread:  {} bps
+                              Funding: entry={}%  now={}%  Δ{}{}% ({}{}%)
+                              ───────────────────────────────────────
+                              {} — {}
+                            """,
+                    signal.getId(),
+                    ex1.getName(), String.format("%.2f", pnlData.getFirstUnrealizedPnl()), firstPriceSource,
+                    ex2.getName(), String.format("%.2f", pnlData.getSecondUnrealizedPnl()), secondPriceSource,
+                    String.format("%.2f", pnlData.getGrossPnl()),
+                    String.format("%.2f", fundingNet),
+                    String.format("%.2f", pnlData.getTotalOpenFees()),
+                    String.format("%.2f", pnlData.getTotalCloseFees()),
+                    String.format("%.2f", totalSlippageImpact), String.format("%.1f", slippageToFunding),
+                    String.format("%.2f", pnlData.getNetPnl()), String.format("%.4f", netRoiPct),
+                    ex1.getName(), String.format("%.1f", firstExitCostBps),
+                    ex2.getName(), String.format("%.1f", secondExitCostBps),
+                    String.format("%.1f", totalExitCostBps),
+                    String.format("%.1f", exchangePriceSpreadBps),
+                    String.format("%.4f", signal.getOpenedFundingRate()), String.format("%.4f", currentFundingRate),
+                    fundingRateDelta >= 0 ? "+" : "", String.format("%.4f", Math.abs(fundingRateDelta)),
+                    fundingRateDeltaPct >= 0 ? "+" : "", String.format("%.2f", Math.abs(fundingRateDeltaPct)),
+                    exitReadiness, exitAdvice);
 
             return pnlData;
 

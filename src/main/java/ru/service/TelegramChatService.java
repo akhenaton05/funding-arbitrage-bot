@@ -319,7 +319,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String message = formatNotificationEvent(event);
 
         for (Long chatId : fundingContext.getSubscriberIds()) {
-            sendMessage(chatId, message);
+            sendMessageAndScheduleDelete (chatId, message, 20);
         }
     }
 
@@ -538,7 +538,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*Gross PnL:* %s%.2f\n" +
                         "*Funding:* %s%.2f\n" +
                         "*Net PnL:* %s%.2f USD (%s%.1f%%)",
-                pnl.getPositionId(), event.getMode(),
+                pnl.getPositionId(),
                 pnl.getTicker(), event.getBalance(),
                 formatDuration(hold), event.getOpenFundingRate(), event.getCurrentFundingRate(),
 

@@ -307,7 +307,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String message = formatPnLThresholdMessage(event);
 
         for (Long chatId : fundingContext.getSubscriberIds()) {
-            sendMessageAndScheduleDelete (chatId, message, 5);
+            sendMessageAndScheduleDelete(chatId, message, 5);
         }
     }
 
@@ -319,7 +319,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String message = formatNotificationEvent(event);
 
         for (Long chatId : fundingContext.getSubscriberIds()) {
-            sendMessageAndScheduleDelete (chatId, message, 20);
+            sendMessageAndScheduleDelete(chatId, message, 20);
         }
     }
 
@@ -348,7 +348,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         for (Long chatId : fundingContext.getSubscriberIds()) {
             Integer msgId = sendMessageAndGetId(chatId, message);
 
-            if (Objects.nonNull(msgId)) {
+            if (msgId != null) {
                 positionMessageIds.put(event.getPositionId(), msgId);
             }
         }
@@ -365,9 +365,17 @@ public class TelegramChatService extends TelegramLongPollingBot {
             Integer msgId = positionMessageIds.get(event.getPositionId());
             editMessage(chatId, msgId, message);
 
-            if (Objects.nonNull(msgId)) {
+            if(!event.isSuccess()) {
+                scheduleDelete(chatId, msgId, 5);
+            }
+
+            if (msgId != null && event.isSuccess()) {
                 positionMessageIds.put(event.getPositionId(), msgId);
             }
+        }
+
+        if (!event.isSuccess()) {
+            positionMessageIds.remove(event.getPositionId());
         }
     }
 
@@ -382,10 +390,11 @@ public class TelegramChatService extends TelegramLongPollingBot {
             Integer msgId = positionMessageIds.get(event.getPositionId());
             editMessage(chatId, msgId, message);
 
-            if (Objects.nonNull(msgId)) {
+            if (msgId != null) {
                 positionMessageIds.put(event.getPositionId(), msgId);
             }
         }
+        positionMessageIds.remove(event.getPositionId());
     }
 
     @EventListener
@@ -915,7 +924,14 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
     }
 
-    // Метод удаления:
+    private void scheduleDelete(Long chatId, Integer messageId, long delayMinutes) {
+        deleteScheduler.schedule(
+                () -> deleteMessage(chatId, messageId),
+                delayMinutes,
+                TimeUnit.MINUTES
+        );
+    }
+
     private void deleteMessage(Long chatId, Integer messageId) {
         try {
             DeleteMessage delete = new DeleteMessage();

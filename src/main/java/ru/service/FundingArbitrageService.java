@@ -43,7 +43,8 @@ public class FundingArbitrageService {
     private static final Set<String> SUPPORTED_EXCHANGES = Set.of(
             "lighter",
             "extended",
-            "aster"
+            "aster",
+            "hyperliquid"
     );
 
     public FundingArbitrageService(CloseableHttpClient httpClient,

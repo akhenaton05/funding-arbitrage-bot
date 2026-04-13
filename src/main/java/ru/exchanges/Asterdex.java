@@ -251,6 +251,7 @@ public class Asterdex implements Exchange {
     @Override
     public double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal, Double prevFunding) {
         try {
+            Thread.sleep(15000);
             String symbol = formatSymbol(ticker);
 
             PremiumIndexResponse premium = asterClient.getPremiumIndexInfo(symbol);

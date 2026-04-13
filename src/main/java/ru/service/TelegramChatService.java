@@ -382,7 +382,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
     @EventListener
     @Async
     public void dynamicClosedPositionListener(PositionClosedEvent event) {
-        log.info("[Telegram] Position opened event for {}", event.getPositionId());
+        log.info("[Telegram] Position closed event for {}", event.getPositionId());
 
         String message = formatPositionClosedMessage(event);
 

@@ -559,8 +559,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     private String formatPrice(double price) {
         if (price >= 1000) return String.format("%.1f", price);
-        if (price >= 1) return String.format("%.4f", price);
-        if (price >= 0.01) return String.format("%.5f", price);
+        if (price >= 1) return String.format("%.2f", price);
+        if (price >= 0.01) return String.format("%.4f", price);
         return String.format("%.6f", price);
     }
 
@@ -894,13 +894,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     private String getExitSpreadInfo(double entrySpread, double exitSpread) {
         return String.format(
-                "S%.2f%% → %.2f%%",
+                "%.2f%% → %.2f%%",
                 entrySpread,
                 exitSpread
         );
     }
 
-    // Метод sendMessageAndScheduleDelete:
     public void sendMessageAndScheduleDelete(Long chatId, String text, long delayMinutes) {
         sendTypingAction(chatId);
         SendMessage message = new SendMessage();

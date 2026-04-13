@@ -290,7 +290,8 @@ public class Asterdex implements Exchange {
                     String.format("%.6f", realFunding),
                     String.format("%.6f", realFunding - (fundingPnl + prevFunding)));
 
-            return fundingPnl + prevFunding;
+//            return fundingPnl + prevFunding;
+            return realFunding;
 
         } catch (AsterApiException e) {
             log.error("[Aster] AsterApiError calculating funding: {}", e.getMessage());

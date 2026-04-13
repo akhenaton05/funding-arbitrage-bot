@@ -293,6 +293,7 @@ public class FundingArbitrageService {
             case "extended" -> ExchangeType.EXTENDED;
             case "aster" -> ExchangeType.ASTER;
             case "lighter" -> ExchangeType.LIGHTER;
+            case "hyperliquid" -> ExchangeType.HYPERLIQUID;
             default -> null;
         };
     }

@@ -85,7 +85,7 @@ public class Hyperliquid implements Exchange {
             HyperliquidOrderBookResponse orderBook = hyperliquidClient.getOrderBook(formatSymbol(symbol));
             return HyperliquidOrderBookMapper.toOrderBook(orderBook, symbol);
         } catch (Exception e) {
-            log.error("[Hyperliquid] Error getting OrderBook for {}", symbol, e);
+            log.error("[Hyper] Error getting OrderBook for {}", symbol, e);
             return null;
         }
     }
@@ -99,6 +99,7 @@ public class Hyperliquid implements Exchange {
         for (HyperliquidPosition pos : raw) {
             result.add(HyperliquidPositionMapper.toPosition(pos));
         }
+        log.info("[Hyper] Parsed hyperliquid position: {}", result);
         return result;
     }
 
@@ -108,17 +109,17 @@ public class Hyperliquid implements Exchange {
             if (currentPairedExchange != null) {
                 int delay = getOpenDelay(currentPairedExchange);
                 if (delay > 0) {
-                    log.info("[Hyperliquid] Waiting {}ms before opening (paired with {})", delay, currentPairedExchange);
+                    log.info("[Hyper] Waiting {}ms before opening (paired with {})", delay, currentPairedExchange);
                     Thread.sleep(delay);
                 }
             }
             return hyperliquidClient.openPositionWithSize(formatSymbol(market), size, direction);
         } catch (InterruptedException e) {
-            log.error("[Hyperliquid] Interrupted during open delay", e);
+            log.error("[Hyper] Interrupted during open delay", e);
             Thread.currentThread().interrupt();
-            throw new ClosingPositionException("[Hyperliquid] Interrupted during open");
+            throw new ClosingPositionException("[Hyper] Interrupted during open");
         } catch (Exception e) {
-            throw new ClosingPositionException("[Hyperliquid] Error opening position - " + e.getMessage());
+            throw new ClosingPositionException("[Hyper] Error opening position - " + e.getMessage());
         }
     }
 
@@ -128,7 +129,7 @@ public class Hyperliquid implements Exchange {
             if (currentPairedExchange != null) {
                 int delay = getCloseDelay(currentPairedExchange);
                 if (delay > 0) {
-                    log.info("[Hyperliquid] Waiting {}ms before closing (paired with {})", delay, currentPairedExchange);
+                    log.info("[Hyper] Waiting {}ms before closing (paired with {})", delay, currentPairedExchange);
                     Thread.sleep(delay);
                 }
             }
@@ -146,13 +147,13 @@ public class Hyperliquid implements Exchange {
 
             return result;
         } catch (InterruptedException e) {
-            log.error("Hyperliquid Interrupted during close delay", e);
+            log.error("[Hyper] Interrupted during close delay", e);
             Thread.currentThread().interrupt();
-            throw new ClosingPositionException("Hyperliquid: Interrupted during close");
+            throw new ClosingPositionException("[Hyper] Interrupted during close");
         } catch (ClosingPositionException e) {
             throw e;
         } catch (Exception e) {
-            throw new ClosingPositionException("Hyperliquid: Error closing position - manual check required");
+            throw new ClosingPositionException("[Hyper] Error closing position - manual check required");
         }
     }
 
@@ -199,38 +200,36 @@ public class Hyperliquid implements Exchange {
             throw new IllegalArgumentException(e);
         }
 
-        String formattedSymbol = formatSymbol(ticker);
-
         // 1. Реальные выплаты из истории (самый точный способ)
-        double accumulated = hyperliquidClient.getAccumulatedFunding(formattedSymbol, signal.getOpenedAtMs());
-        if (accumulated != 0.0) {
-            log.info("Hyperliquid Funding for {}/{}: real accumulated={} since openedAt={}",
-                    ticker, direction, String.format("%.6f", accumulated), signal.getOpenedAtMs());
-            return accumulated + (prevFunding != null ? prevFunding : 0.0);
-        }
-
-        // 2. Fallback: rate × positionValue (если история пустая — позиция только открылась)
-        try {
-            List<Position> positions = getPositions(ticker, direction);
-            if (!positions.isEmpty()) {
-                double positionValue = positions.getFirst().getSize();
-                double fundingRate   = hyperliquidClient.getFundingRate(formattedSymbol) / 100.0; // % → decimal
-                boolean isLong       = direction == Direction.LONG;
-                // При лонге и положительном rate — платим фандинг (negative pnl)
-                double fundingPnl    = isLong ? -positionValue * fundingRate : positionValue * fundingRate;
-                log.info("Hyperliquid Funding for {}/{}: rate={} posValue={} estimatedPnl={}",
-                        ticker, direction,
-                        String.format("%.6f", fundingRate),
-                        String.format("%.2f", positionValue),
-                        String.format("%.4f", fundingPnl));
-                return fundingPnl + (prevFunding != null ? prevFunding : 0.0);
-            }
-        } catch (Exception e) {
-            log.warn("Hyperliquid Fallback funding calc failed for {}: {}", ticker, e.getMessage());
-        }
-
-        log.warn("Hyperliquid No funding data for {}", ticker);
-        return prevFunding != null ? prevFunding : 0.0;
+        return hyperliquidClient.getAccumulatedFunding(formatSymbol(ticker), direction.name());
+//        double accumulated = hyperliquidClient.getAccumulatedFunding(formattedSymbol, signal.getOpenedAtMs());
+//        if (accumulated != 0.0) {
+//            log.info("[Hyper] Funding for {}/{}: real accumulated={} since openedAt={}",
+//                    ticker, direction, String.format("%.4f", accumulated), signal.getOpenedAtMs());
+//            return accumulated + (prevFunding != null ? prevFunding : 0.0);
+//        }
+//
+//        // 2. Fallback: rate * positionValue
+//        try {
+//            List<Position> positions = getPositions(ticker, direction);
+//            if (!positions.isEmpty()) {
+//                double positionValue = positions.getFirst().getSize();
+//                double fundingRate   = hyperliquidClient.getFundingRate(formattedSymbol) / 100.0; // % → decimal
+//                boolean isLong       = direction == Direction.LONG;
+//                double fundingPnl    = isLong ? -positionValue * fundingRate : positionValue * fundingRate;
+//                log.info("Hyperliquid Funding for {}/{}: rate={} posValue={} estimatedPnl={}",
+//                        ticker, direction,
+//                        String.format("%.4f", fundingRate),
+//                        String.format("%.2f", positionValue),
+//                        String.format("%.4f", fundingPnl));
+//                return fundingPnl + (prevFunding != null ? prevFunding : 0.0);
+//            }
+//        } catch (Exception e) {
+//            log.warn("[Hyper] Fallback funding calc failed for {}: {}", ticker, e.getMessage());
+//        }
+//
+//        log.warn("[Hyper] No funding data for {}", ticker);
+//        return prevFunding != null ? prevFunding : 0.0;
     }
 
     @Override
@@ -250,38 +249,21 @@ public class Hyperliquid implements Exchange {
 
     @Override
     public String placeStopLoss(String symbol, Direction direction, double stopPrice) {
-        return "Hyperliquid SL not yet implemented";
+        return "[Hyper] SL not yet implemented";
     }
 
     @Override
     public String placeTakeProfit(String symbol, Direction direction, double tpPrice) {
-        return "Hyperliquid TP not yet implemented";
+        return "[Hyper] TP not yet implemented";
     }
 
     @Override
     public boolean supportsSlTp() {
-        return false; // TODO: реализовать через HL trigger orders
+        return false;
     }
 
     @Override
     public boolean isFundingTimeValid(String ticker) {
         return true;
     }
-
-    // ─── Risk ─────────────────────────────────────────────────────────────────
-
-//    @Override
-//    public PositionRiskControl validatePositionRisk(String symbol, Direction direction) {
-//        // HL возвращает liquidationPx в позиции, mark price берём из стакана
-//        List<Position> positions = getPositions(symbol, direction);
-//        log.info("Hyperliquid PositionRisk position: {}", positions);
-//        double markPrice = hyperliquidClient.getMarkPrice(formatSymbol(symbol));
-//        log.info("Hyperliquid Got liquidation price: {} and mark price: {}",
-//                positions.getFirst().getLiquidationPrice(), markPrice);
-//        return PositionRiskControl.builder()
-//                .entryPrice(positions.getFirst().getEntryPrice())
-//                .liquidationPrice(positions.getFirst().getLiquidationPrice())
-//                .markPrice(markPrice)
-//                .build();
-//    }
 }

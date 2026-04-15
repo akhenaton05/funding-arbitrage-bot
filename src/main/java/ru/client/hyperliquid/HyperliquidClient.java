@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import ru.dto.exchanges.ExchangeType;
 import ru.dto.exchanges.OrderResult;
@@ -33,71 +32,50 @@ public class HyperliquidClient {
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
-    private String baseUrl; // http://localhost:5002
+    private String baseUrl;
 
     public HyperliquidClient(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
 
-    // ─── Utils ───────────────────────────────────────────────────────────────
-
-    private HttpResponse<String> get(String url) throws IOException, InterruptedException {
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(20))
-                .GET()
-                .build();
-        return localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
-    }
-
-    private HttpResponse<String> post(String url, Object body) throws IOException, InterruptedException {
-        String jsonBody = objectMapper.writeValueAsString(body);
-        log.info("Hyperliquid POST {} body={}", url, jsonBody);
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(30))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(jsonBody, StandardCharsets.UTF_8))
-                .build();
-        return localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
-    }
-
-    // ─── Markets ─────────────────────────────────────────────────────────────
-
+    /**
+     * Markets
+     */
     public List<HyperliquidMarket> getMarkets() {
         String url = baseUrl + "/markets";
         try {
             HttpResponse<String> response = get(url);
             if (response.statusCode() != 200) {
-                log.error("Hyperliquid Markets API error: {}", response.statusCode());
+                log.error("[Hyperliquid] Markets API error: {}", response.statusCode());
                 return List.of();
             }
             HyperliquidMarketsResponse dto = objectMapper.readValue(response.body(), HyperliquidMarketsResponse.class);
-            log.info("Hyperliquid Loaded {} markets", dto.getCount());
+            log.info("[Hyperliquid] Loaded {} markets", dto.getCount());
             return dto.getData() != null ? dto.getData() : List.of();
         } catch (Exception e) {
-            log.error("Hyperliquid Failed to get markets", e);
+            log.error("[Hyperliquid] Failed to get markets", e);
             return List.of();
         }
     }
 
-    // ─── Balance ─────────────────────────────────────────────────────────────
-
+    /**
+     * Balance
+     */
     public Double getBalance() {
         String url = baseUrl + "/balance";
         try {
             HttpResponse<String> response = get(url);
             if (response.statusCode() != 200) {
-                log.error("Hyperliquid Balance API error: {}", response.statusCode());
+                log.error("[Hyperliquid] Balance API error: {}", response.statusCode());
                 return 0.0;
             }
             HyperliquidBalanceDto dto = objectMapper.readValue(response.body(), HyperliquidBalanceDto.class);
             if (!"OK".equals(dto.getStatus())) return 0.0;
             double balance = Double.parseDouble(dto.getData().getAvailableForTrade());
-            log.info("Hyperliquid Balance: {}", balance);
+            log.info("[Hyperliquid] Balance: {}", balance);
             return balance;
         } catch (Exception e) {
-            log.error("Hyperliquid Failed to get balance", e);
+            log.error("[Hyperliquid] Failed to get balance", e);
             return 0.0;
         }
     }
@@ -110,10 +88,10 @@ public class HyperliquidClient {
             HyperliquidBalanceDto dto = objectMapper.readValue(response.body(), HyperliquidBalanceDto.class);
             if (!"OK".equalsIgnoreCase(dto.getStatus())) return 0.0;
             double equity = Double.parseDouble(dto.getData().getEquity());
-            log.info("Hyperliquid Equity: {}", equity);
+            log.info("[Hyperliquid] Equity: {}", equity);
             return equity;
         } catch (Exception e) {
-            log.error("Hyperliquid Failed to get equity", e);
+            log.error("[Hyperliquid] Failed to get equity", e);
             return 0.0;
         }
     }
@@ -126,20 +104,21 @@ public class HyperliquidClient {
             HyperliquidBalanceDto dto = objectMapper.readValue(response.body(), HyperliquidBalanceDto.class);
             if (!"OK".equalsIgnoreCase(dto.getStatus())) return 0.0;
             double marginUsed = Double.parseDouble(dto.getData().getMarginUsed());
-            log.info("Hyperliquid Margin used: {}", marginUsed);
+            log.info("[Hyperliquid] Margin used: {}", marginUsed);
             return marginUsed;
         } catch (Exception e) {
-            log.error("Hyperliquid Failed to get margin used", e);
+            log.error("[Hyperliquid] Failed to get margin used", e);
             return 0.0;
         }
     }
 
-    // ─── Leverage ────────────────────────────────────────────────────────────
-
+    /**
+     * Leverage
+     */
     public String setLeverage(String market, int leverage) {
         String url = baseUrl + "/user/leverage";
         if (leverage < 1 || leverage > 50) {
-            log.error("Hyperliquid Invalid leverage {}. Must be 1-50x", leverage);
+            log.error("[Hyperliquid] Invalid leverage {}. Must be 1-50x", leverage);
             return null;
         }
         Map<String, Object> body = new HashMap<>();
@@ -149,18 +128,18 @@ public class HyperliquidClient {
         try {
             HttpResponse<String> response = post(url, body);
             if (response.statusCode() != 200) {
-                log.error("Hyperliquid Leverage HTTP error: {}", response.statusCode());
+                log.error("[Hyperliquid] Leverage HTTP error: {}", response.statusCode());
                 return null;
             }
             HyperliquidLeverageResponse dto = objectMapper.readValue(response.body(), HyperliquidLeverageResponse.class);
             if (!"success".equalsIgnoreCase(dto.getStatus())) {
-                log.warn("Hyperliquid Leverage status: {}", dto.getStatus());
+                log.warn("[Hyperliquid] Leverage status: {}", dto.getStatus());
                 return null;
             }
-            log.info("Hyperliquid Leverage {}x set for {}", leverage, market);
+            log.info("[Hyperliquid] Leverage {}x set for {}", leverage, market);
             return "success";
         } catch (Exception e) {
-            log.error("Hyperliquid Exception setting leverage", e);
+            log.error("[Hyperliquid] Exception setting leverage", e);
             return null;
         }
     }
@@ -168,32 +147,33 @@ public class HyperliquidClient {
     public int getMaxLeverage(String symbol) {
         String url = baseUrl + "/markets/" + symbol + "/max-leverage";
         try {
-            log.info("Hyperliquid Getting max leverage for {}", symbol);
+            log.info("[Hyperliquid] Getting max leverage for {}", symbol);
             HttpResponse<String> response = get(url);
             if (response.statusCode() != 200) {
-                log.warn("Hyperliquid Max leverage HTTP error {}, using default 20x", response.statusCode());
+                log.warn("[Hyperliquid] Max leverage HTTP error {}, using default 20x", response.statusCode());
                 return 20;
             }
             JsonNode root = objectMapper.readTree(response.body());
             if (!"OK".equals(root.path("status").asText())) {
-                log.warn("Hyperliquid Max leverage request failed, using default 20x");
+                log.warn("[Hyperliquid] Max leverage request failed, using default 20x");
                 return 20;
             }
             int maxLeverage = root.path("max_leverage").asInt(20);
             String source   = root.path("source").asText("unknown");
-            log.info("Hyperliquid Max leverage for {}: {}x (source={})", symbol, maxLeverage, source);
+            log.info("[Hyperliquid] Max leverage for {}: {}x (source={})", symbol, maxLeverage, source);
             return maxLeverage;
         } catch (IOException | InterruptedException e) {
-            log.error("Hyperliquid Exception getting max leverage for {}, using 20x", symbol, e);
+            log.error("[Hyperliquid] Exception getting max leverage for {}, using 20x", symbol, e);
             return 20;
         } catch (Exception e) {
-            log.error("Hyperliquid Unexpected error getting max leverage for {}, using 20x", symbol, e);
+            log.error("[Hyperliquid] Unexpected error getting max leverage for {}, using 20x", symbol, e);
             return 20;
         }
     }
 
-    // ─── Open Position ────────────────────────────────────────────────────────
-
+    /**
+     * Orders
+     */
     public HyperliquidMarketOrderResponse openMarketPosition(String market, String side, double size) {
         String url = baseUrl + "/order/market";
         Map<String, Object> body = new HashMap<>();
@@ -230,8 +210,6 @@ public class HyperliquidClient {
         return openMarketPosition(market, side, size).getOrderId();
     }
 
-    // ─── Close Position ───────────────────────────────────────────────────────
-
     public HyperliquidClosePositionResponse closePosition(String market, String currentSide) {
         String url = baseUrl + "/positions/close";
         Map<String, Object> body = new HashMap<>();
@@ -239,20 +217,20 @@ public class HyperliquidClient {
         body.put("current_side", currentSide.toUpperCase());
         try {
             HttpResponse<String> response = post(url, body);
-            log.info("Hyperliquid Close response HTTP {}: {}", response.statusCode(), response.body());
+            log.info("[Hyperliquid] Close response HTTP {}: {}", response.statusCode(), response.body());
             if (response.statusCode() != 200 && response.statusCode() != 202) {
-                log.error("Hyperliquid Close HTTP error: {}", response.statusCode());
+                log.error("[Hyperliquid] Close HTTP error: {}", response.statusCode());
                 return null;
             }
             HyperliquidClosePositionResponse dto = objectMapper.readValue(response.body(), HyperliquidClosePositionResponse.class);
             if ("success".equalsIgnoreCase(dto.getStatus()) || "submitted".equalsIgnoreCase(dto.getStatus())) {
-                log.info("Hyperliquid Position closed: {}", dto.getMessage());
+                log.info("[Hyperliquid] Position closed: {}", dto.getMessage());
                 return dto;
             }
-            log.error("Hyperliquid Close failed status: {}", dto.getStatus());
+            log.error("[Hyperliquid] Close failed status: {}", dto.getStatus());
             return null;
         } catch (Exception e) {
-            log.error("Hyperliquid Exception closing position", e);
+            log.error("[Hyperliquid] Exception closing position", e);
             return null;
         }
     }
@@ -280,8 +258,9 @@ public class HyperliquidClient {
                 .build();
     }
 
-    // ─── Positions ────────────────────────────────────────────────────────────
-
+    /**
+     * Positions
+     */
     public List<HyperliquidPosition> getPositions(String market, String side) {
         StringBuilder url = new StringBuilder(baseUrl + "/positions");
         if (market != null || side != null) {
@@ -294,15 +273,15 @@ public class HyperliquidClient {
         }
         try {
             HttpResponse<String> response = get(url.toString());
-            log.info("Hyperliquid Positions response HTTP {}: {}", response.statusCode(), response.body());
+            log.info("[Hyperliquid] Positions response HTTP {}: {}", response.statusCode(), response.body());
             if (response.statusCode() != 200) {
-                log.error("Hyperliquid Positions HTTP error: {}", response.statusCode());
+                log.error("[Hyperliquid] Positions HTTP error: {}", response.statusCode());
                 return List.of();
             }
             HyperliquidPositionsResponse dto = objectMapper.readValue(response.body(), HyperliquidPositionsResponse.class);
             return dto.getData() != null ? dto.getData() : List.of();
         } catch (Exception e) {
-            log.error("Hyperliquid Exception getting positions", e);
+            log.error("[Hyperliquid] Exception getting positions", e);
             return List.of();
         }
     }
@@ -335,88 +314,86 @@ public class HyperliquidClient {
         }
     }
 
-    // ─── Funding ──────────────────────────────────────────────────────────────
-
     /**
-     * Реальные накопленные выплаты фандинга с момента openTimeMs.
-     * Аналог /v1/income?incomeType=FUNDING_FEE у Aster.
+     * Funding
      */
-    public Double getAccumulatedFunding(String market, long openTimeMs) {
-        // Hyperliquid хранит время в ms — передаём напрямую
-        String url = baseUrl + "/funding/history?market=" + market + "&start_time=" + openTimeMs;
-        try {
-            HttpResponse<String> response = get(url);
-            if (response.statusCode() != 200) {
-                log.error("Hyperliquid Funding HTTP error: {}", response.statusCode());
-                return 0.0;
-            }
-            JsonNode root = objectMapper.readTree(response.body());
-            if (!"OK".equals(root.path("status").asText())) {
-                log.warn("Hyperliquid Funding status not OK: {}", root.path("status").asText());
-                return 0.0;
-            }
-            double funding = root.path("accumulated_funding").asDouble(0.0);
-            log.info("Hyperliquid Accumulated funding for {} since {}: {}", market, openTimeMs, funding);
-            return funding;
-        } catch (Exception e) {
-            log.error("Hyperliquid Error getting funding", e);
+    public Double getAccumulatedFunding(String market, String side) {
+        List<HyperliquidPosition> positions = getPositions(market, side);
+        if (positions.isEmpty()) {
+            log.warn("[Hyperliquid] No position found for {} {} — funding=0", market, side);
             return 0.0;
         }
+        HyperliquidPosition pos = positions.getFirst();
+        log.info("[Hyperliquid] Funding accumulated for {}: {}", market, pos.getFundingPaid());
+        return Double.parseDouble(pos.getFundingPaid());
     }
+//    public Double getAccumulatedFunding(String market, long openTimeMs) {
+//        String url = baseUrl + "/funding/history?market=" + market + "&start_time=" + openTimeMs;
+//        try {
+//            HttpResponse<String> response = get(url);
+//            if (response.statusCode() != 200) {
+//                log.error("[Hyperliquid] Funding HTTP error: {}", response.statusCode());
+//                return 0.0;
+//            }
+//            JsonNode root = objectMapper.readTree(response.body());
+//            if (!"OK".equals(root.path("status").asText())) {
+//                log.warn("[Hyperliquid] Funding status not OK: {}", root.path("status").asText());
+//                return 0.0;
+//            }
+//            double funding = root.path("accumulated_funding").asDouble(0.0);
+//            log.info("[Hyperliquid] Accumulated funding for {} since {}: {}", market, openTimeMs, funding);
+//            return funding;
+//        } catch (Exception e) {
+//            log.error("[Hyperliquid] Error getting funding", e);
+//            return 0.0;
+//        }
+//    }
 
-    public Double getAccumulatedFunding(String market) {
-        return getAccumulatedFunding(market, 0L);
-    }
+//    public Double getAccumulatedFunding(String market) {
+//        return getAccumulatedFunding(market, 0L);
+//    }
 
     public Double getFundingRate(String market) {
         String url = baseUrl + "/markets/" + market + "/funding-rate";
         try {
             HttpResponse<String> response = get(url);
             if (response.statusCode() != 200) {
-                log.error("Hyperliquid Funding rate HTTP error: {}", response.statusCode());
+                log.error("[Hyperliquid] Funding rate HTTP error: {}", response.statusCode());
                 return 0.0;
             }
             JsonNode root = objectMapper.readTree(response.body());
             if (!"OK".equals(root.path("status").asText())) {
-                log.warn("Hyperliquid Funding rate status not OK for {}", market);
+                log.warn("[Hyperliquid] Funding rate status not OK for {}", market);
                 return 0.0;
             }
             double rate = root.path("funding_rate").asDouble(0.0);
-            // HL платит каждый час — возвращаем почасовую ставку в %
-            log.info("Hyperliquid Funding rate for {}: {}% (1h)", market, rate);
+            log.info("[Hyperliquid] Funding rate for {}: {}% (1h)", market, rate);
             return rate;
         } catch (Exception e) {
-            log.error("Hyperliquid Failed to get funding rate for {}: {}", market, e.getMessage());
+            log.error("[Hyperliquid] Failed to get funding rate for {}: {}", market, e.getMessage());
             return 0.0;
         }
     }
 
     /**
-     * Интервал фандинга для HL всегда 1 час.
-     * Метод для совместимости с логикой расчёта в ExchangesService.
+     * OrderBook
      */
-    public int getFundingIntervalHours(String market) {
-        return 1;
-    }
-
-    // ─── Order Book ───────────────────────────────────────────────────────────
-
     public HyperliquidOrderBookResponse getOrderBook(String market, int limit) {
         String url = baseUrl + "/markets/" + market + "/orderbook?limit=" + limit;
         try {
             HttpResponse<String> response = get(url);
-            log.info("Hyperliquid OrderBook response HTTP {}", response.statusCode());
+            log.info("[Hyperliquid] OrderBook response HTTP {}", response.statusCode());
             if (response.statusCode() != 200) {
-                log.error("Hyperliquid OrderBook HTTP error: {}", response.statusCode());
+                log.error("[Hyperliquid] OrderBook HTTP error: {}", response.statusCode());
                 return null;
             }
             HyperliquidOrderBookResponse dto = objectMapper.readValue(response.body(), HyperliquidOrderBookResponse.class);
             if (!"OK".equals(dto.getStatus())) return null;
-            log.info("Hyperliquid OrderBook bids={}, asks={}, mid={}",
+            log.info("[Hyperliquid] OrderBook bids={}, asks={}, mid={}",
                     dto.getSummary().getBidsCount(), dto.getSummary().getAsksCount(), dto.getSummary().getMidPrice());
             return dto;
         } catch (Exception e) {
-            log.error("Hyperliquid Failed to get orderbook", e);
+            log.error("[Hyperliquid] Failed to get orderbook", e);
             return null;
         }
     }
@@ -429,15 +406,16 @@ public class HyperliquidClient {
         HyperliquidOrderBookResponse ob = getOrderBook(market, 5);
         if (ob != null && ob.getSummary() != null && ob.getSummary().getMidPrice() != null) {
             double mid = ob.getSummary().getMidPrice();
-            log.info("Hyperliquid Mark/mid price for {} from orderbook: {}", market, mid);
+            log.info("[Hyperliquid] Mark/mid price for {} from orderbook: {}", market, mid);
             return mid;
         }
-        log.warn("Hyperliquid Mark price unavailable for {}", market);
+        log.warn("[Hyperliquid] Mark price unavailable for {}", market);
         return 0.0;
     }
 
-    // ─── Calculate Size ───────────────────────────────────────────────────────
-
+    /**
+     * Utils
+     */
     public Double calculateMaxSizeForMargin(String market, double marginUsd, int leverage, boolean isBuy) {
         String url = baseUrl + "/markets/" + market + "/calculate-size";
         Map<String, Object> body = new HashMap<>();
@@ -447,20 +425,41 @@ public class HyperliquidClient {
         try {
             HttpResponse<String> response = post(url, body);
             if (response.statusCode() != 200) {
-                log.error("Hyperliquid Calculate size HTTP error: {}", response.statusCode());
+                log.error("[Hyperliquid] Calculate size HTTP error: {}", response.statusCode());
                 return null;
             }
             HyperliquidCalculateSizeResponse dto = objectMapper.readValue(response.body(), HyperliquidCalculateSizeResponse.class);
             if (!"OK".equals(dto.getStatus())) {
-                log.error("Hyperliquid Calculate size failed: {}", dto.getStatus());
+                log.error("[Hyperliquid] Calculate size failed: {}", dto.getStatus());
                 return null;
             }
-            log.info("Hyperliquid Max size for {}USD {}x {} price={}: {}",
+            log.info("[Hyperliquid] Max size for {}USD {}x {} price={}: {}",
                     marginUsd, leverage, market, String.format("%.4f", dto.getPrice()), dto.getMaxSize());
             return dto.getMaxSize();
         } catch (Exception e) {
-            log.error("Hyperliquid Exception calculating max size", e);
+            log.error("[Hyperliquid] Exception calculating max size", e);
             return null;
         }
+    }
+
+    private HttpResponse<String> get(String url) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(20))
+                .GET()
+                .build();
+        return localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> post(String url, Object body) throws IOException, InterruptedException {
+        String jsonBody = objectMapper.writeValueAsString(body);
+        log.info("[Hyperliquid] POST {} body={}", url, jsonBody);
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(30))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonBody, StandardCharsets.UTF_8))
+                .build();
+        return localHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
     }
 }

@@ -361,6 +361,10 @@ def get_positions():
             leverage_val = pos.get("leverage", {})
             lev_val   = leverage_val.get("value", 1) if isinstance(leverage_val, dict) else 1
 
+            # funding
+            cum_funding      = pos.get("cumFunding", {})
+            funding_since_open = float(cum_funding.get("sinceOpen", 0) or 0)
+
             # mark price из ctxs
             mark_px = entry_px
             if coin in market_meta_cache:
@@ -379,7 +383,7 @@ def get_positions():
                 "margin":            str(margin),
                 "liquidation_price": str(liq_px),
                 "leverage":          f"{lev_val}x",
-                "funding_paid":      "0",
+                "funding_paid":      str(funding_since_open),
             })
 
         logger.info(f"Returning {len(formatted)} positions")

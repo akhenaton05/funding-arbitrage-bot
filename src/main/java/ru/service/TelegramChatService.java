@@ -103,7 +103,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String cmd = parts[0].toLowerCase();
 
         switch (cmd) {
-            case "/track" -> fundingContext.addSubscriberId(chatId);
+            case "/track" -> addSubscriberId(chatId);
             case "/untrack" -> fundingContext.removeSubscriberId(chatId);
             case "/rates" -> sendRates(chatId);
             case "/trades" -> getTrades(chatId);
@@ -944,6 +944,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
         } catch (TelegramApiException e) {
             log.warn("Telegram Failed to delete message {}: {}", messageId, e.getMessage());
         }
+    }
+
+    //Sub
+    private void addSubscriberId(Long chatId) {
+        fundingContext.addSubscriberId(chatId);
+        sendMessageAndScheduleDelete(chatId, "🤖 *FundingBot:* User `" + chatId + "` added", 3);
     }
 
     //Blacklist

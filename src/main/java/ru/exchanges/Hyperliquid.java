@@ -195,41 +195,12 @@ public class Hyperliquid implements Exchange {
     @Override
     public double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal, Double prevFunding) {
         try {
-            Thread.sleep(15000);
+            Thread.sleep(12000);
         } catch (InterruptedException e) {
             throw new IllegalArgumentException(e);
         }
 
-        // 1. Реальные выплаты из истории (самый точный способ)
-        return hyperliquidClient.getAccumulatedFunding(formatSymbol(ticker), direction.name());
-//        double accumulated = hyperliquidClient.getAccumulatedFunding(formattedSymbol, signal.getOpenedAtMs());
-//        if (accumulated != 0.0) {
-//            log.info("[Hyper] Funding for {}/{}: real accumulated={} since openedAt={}",
-//                    ticker, direction, String.format("%.4f", accumulated), signal.getOpenedAtMs());
-//            return accumulated + (prevFunding != null ? prevFunding : 0.0);
-//        }
-//
-//        // 2. Fallback: rate * positionValue
-//        try {
-//            List<Position> positions = getPositions(ticker, direction);
-//            if (!positions.isEmpty()) {
-//                double positionValue = positions.getFirst().getSize();
-//                double fundingRate   = hyperliquidClient.getFundingRate(formattedSymbol) / 100.0; // % → decimal
-//                boolean isLong       = direction == Direction.LONG;
-//                double fundingPnl    = isLong ? -positionValue * fundingRate : positionValue * fundingRate;
-//                log.info("Hyperliquid Funding for {}/{}: rate={} posValue={} estimatedPnl={}",
-//                        ticker, direction,
-//                        String.format("%.4f", fundingRate),
-//                        String.format("%.2f", positionValue),
-//                        String.format("%.4f", fundingPnl));
-//                return fundingPnl + (prevFunding != null ? prevFunding : 0.0);
-//            }
-//        } catch (Exception e) {
-//            log.warn("[Hyper] Fallback funding calc failed for {}: {}", ticker, e.getMessage());
-//        }
-//
-//        log.warn("[Hyper] No funding data for {}", ticker);
-//        return prevFunding != null ? prevFunding : 0.0;
+        return hyperliquidClient.getAccumulatedFunding(formatSymbol(ticker), direction.name()) * -1;
     }
 
     @Override

@@ -112,6 +112,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
             case "/pnl" -> calculatePositionPnl(chatId, parts);
             case "/balance" -> getExchangesBalance(chatId);
             case "/history" -> getTradeHistory(chatId);
+            case "/blacklist" -> addToBlacklist(chatId, parts);
+            case "/blacklist_remove" -> removeFromBlacklist(chatId, parts);
         }
     }
 
@@ -190,7 +192,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
         PositionPnLData posData = exchangesService.pnlPositionCalculator(positionId);
 
-        sendMessage(chatId, validateCurrentPnl(posData));
+        sendMessageAndScheduleDelete(chatId, validateCurrentPnl(posData), 3);
     }
 
     private void getExchangesBalance(Long chatId) {
@@ -942,5 +944,35 @@ public class TelegramChatService extends TelegramLongPollingBot {
         } catch (TelegramApiException e) {
             log.warn("Telegram Failed to delete message {}: {}", messageId, e.getMessage());
         }
+    }
+
+    //Blacklist
+    private void addToBlacklist(Long chatId, String[] parts) {
+        if (parts.length < 2 || parts[1].trim().isEmpty()) {
+            sendMessage(chatId, "Usage: /blacklist TICKER");
+            return;
+        }
+        String ticker = parts[1].trim().toUpperCase();
+        fundingContext.addToBlacklist(ticker);
+        sendMessageAndScheduleDelete(chatId, "🤖 *FundingBot:* Added to blacklist: " + ticker, 3);
+        showBlacklist(chatId);
+    }
+
+    private void showBlacklist(Long chatId) {
+        Set<String> list = fundingContext.getTickerBlacklist();
+        String msg = list.isEmpty()
+                ? "🤖 *FundingBot:* Blacklist is empty"
+                : "🤖 *FundingBot:* Blacklisted tickers:\n" + String.join(", ", list);
+        sendMessageAndScheduleDelete(chatId, msg, 3);
+    }
+
+    private void removeFromBlacklist(Long chatId, String[] parts) {
+        if (parts.length < 2 || parts[1].trim().isEmpty()) {
+            sendMessage(chatId, "Usage: /blacklist_remove TICKER");
+            return;
+        }
+        String ticker = parts[1].trim().toUpperCase();
+        fundingContext.removeFromBlacklist(ticker);
+        sendMessageAndScheduleDelete(chatId, "🤖 *FundingBot:* Removed from blacklist: " + ticker, 3);
     }
 }

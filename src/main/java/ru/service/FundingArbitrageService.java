@@ -84,9 +84,7 @@ public class FundingArbitrageService {
                     break;
                 }
 
-                if (rate.getSymbol().equalsIgnoreCase("MSTR")
-                        || rate.getSymbol().equalsIgnoreCase("CRCL")
-                        || rate.getSymbol().equalsIgnoreCase("SIREN")) {
+                if (fundingContext.isBlacklisted(rate.getSymbol())) {
                     continue;
                 }
 

@@ -949,13 +949,12 @@ public class TelegramChatService extends TelegramLongPollingBot {
     //Blacklist
     private void addToBlacklist(Long chatId, String[] parts) {
         if (parts.length < 2 || parts[1].trim().isEmpty()) {
-            sendMessage(chatId, "Usage: /blacklist TICKER");
+            showBlacklist(chatId);
             return;
         }
         String ticker = parts[1].trim().toUpperCase();
         fundingContext.addToBlacklist(ticker);
         sendMessageAndScheduleDelete(chatId, "🤖 *FundingBot:* Added to blacklist: " + ticker, 3);
-        showBlacklist(chatId);
     }
 
     private void showBlacklist(Long chatId) {

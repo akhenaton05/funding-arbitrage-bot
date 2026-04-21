@@ -322,4 +322,9 @@ public class Extended implements Exchange {
     public boolean isFundingTimeValid(String ticker) {
         return true;
     }
+
+    @Override
+    public double getCurrentPrice(String ticker) {
+        return extendedClient.getMarkPrice(formatSymbol(ticker));
+    }
 }

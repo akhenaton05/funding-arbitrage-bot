@@ -1,4 +1,4 @@
-package ru.service;
+package ru.service.funding;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;

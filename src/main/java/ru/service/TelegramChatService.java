@@ -24,6 +24,9 @@ import ru.dto.db.model.Period;
 import ru.dto.exchanges.*;
 import ru.dto.funding.*;
 import ru.event.*;
+import ru.service.funding.ExchangesService;
+import ru.service.funding.FundingArbitrageService;
+import ru.service.funding.TradeHistoryService;
 import ru.utils.FundingArbitrageContext;
 
 import java.time.Duration;

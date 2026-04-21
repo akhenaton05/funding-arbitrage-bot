@@ -58,4 +58,6 @@ public interface Exchange {
 //    PositionRiskControl validatePositionRisk(String symbol, Direction direction);
 
     boolean isFundingTimeValid(String ticker);
+
+    double getCurrentPrice(String ticker);
 }

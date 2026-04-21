@@ -195,4 +195,9 @@ public class Lighter implements Exchange {
     public boolean isFundingTimeValid(String ticker) {
         return true;
     }
+
+    @Override
+    public double getCurrentPrice(String ticker) {
+        return lighterClient.getMarkPrice(formatSymbol(ticker));
+    }
 }

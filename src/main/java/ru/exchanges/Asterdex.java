@@ -346,4 +346,9 @@ public class Asterdex implements Exchange {
         long minutes = getMinutesUntilFunding(ticker);
         return minutes <= 60;
     }
+
+    @Override
+    public double getCurrentPrice(String ticker) {
+        return asterClient.getMarkPrice(formatSymbol(ticker));
+    }
 }

@@ -1,4 +1,4 @@
-package ru.service;
+package ru.service.funding;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.ValidationException;

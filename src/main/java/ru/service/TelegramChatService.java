@@ -149,8 +149,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
                                 opp.getSymbol(),
                                 oi,
                                 opp.getArbitrageRate(),
-                                opp.getFirstExchange().getDisplayName() + firstDir,
-                                opp.getSecondExchange().getDisplayName() + secondDir
+                                ExchangeType.abbreviate(opp.getFirstExchange().getDisplayName()) + firstDir,
+                                ExchangeType.abbreviate(opp.getSecondExchange().getDisplayName()) + secondDir
                         ));
                     });
 

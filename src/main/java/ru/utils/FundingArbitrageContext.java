@@ -2,6 +2,7 @@ package ru.utils;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import ru.config.FundingConfig;
 
 import java.util.Collections;
 import java.util.Set;
@@ -13,6 +14,35 @@ import java.util.concurrent.ConcurrentHashMap;
 public class FundingArbitrageContext {
 
     private final Set<Long> subscriberIds = ConcurrentHashMap.newKeySet();
+    private final Set<String> tickerBlacklist = ConcurrentHashMap.newKeySet();
+
+    public FundingArbitrageContext(FundingConfig fundingConfig) {
+        if (fundingConfig.getTickerBlacklist() != null) {
+            fundingConfig.getTickerBlacklist().stream()
+                    .map(String::toUpperCase)
+                    .forEach(tickerBlacklist::add);
+            log.info("Loaded {} tickers from blacklist config: {}",
+                    tickerBlacklist.size(), tickerBlacklist);
+        }
+    }
+
+    public void addToBlacklist(String ticker) {
+        tickerBlacklist.add(ticker.toUpperCase());
+        log.info("Ticker added to blacklist: {}", ticker);
+    }
+
+    public void removeFromBlacklist(String ticker) {
+        tickerBlacklist.remove(ticker.toUpperCase());
+        log.info("Ticker removed from blacklist: {}", ticker);
+    }
+
+    public boolean isBlacklisted(String ticker) {
+        return tickerBlacklist.contains(ticker.toUpperCase());
+    }
+
+    public Set<String> getTickerBlacklist() {
+        return Collections.unmodifiableSet(tickerBlacklist);
+    }
 
     public void addSubscriberId(Long chatId) {
         if (subscriberIds.add(chatId)) {
@@ -30,10 +60,6 @@ public class FundingArbitrageContext {
 
     public Set<Long> getSubscriberIds() {
         return Collections.unmodifiableSet(subscriberIds);
-    }
-
-    public boolean isSubscribed(Long chatId) {
-        return subscriberIds.contains(chatId);
     }
 
 }

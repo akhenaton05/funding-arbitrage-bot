@@ -11,6 +11,7 @@ import org.telegram.telegrambots.meta.api.methods.ActionType;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.send.SendChatAction;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.updatingmessages.DeleteMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
 import org.telegram.telegrambots.meta.api.objects.*;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
@@ -30,6 +31,9 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -40,6 +44,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
     private final FundingArbitrageService fundingService;
     private final ExchangesService exchangesService;
     private final TradeHistoryService tradeHistoryService;
+    private final ScheduledExecutorService deleteScheduler =
+            Executors.newSingleThreadScheduledExecutor();
 
     private final Map<String, Integer> positionMessageIds = new ConcurrentHashMap<>();
 
@@ -97,7 +103,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String cmd = parts[0].toLowerCase();
 
         switch (cmd) {
-            case "/track" -> fundingContext.addSubscriberId(chatId);
+            case "/track" -> addSubscriberId(chatId);
             case "/untrack" -> fundingContext.removeSubscriberId(chatId);
             case "/rates" -> sendRates(chatId);
             case "/trades" -> getTrades(chatId);
@@ -106,6 +112,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
             case "/pnl" -> calculatePositionPnl(chatId, parts);
             case "/balance" -> getExchangesBalance(chatId);
             case "/history" -> getTradeHistory(chatId);
+            case "/blacklist" -> addToBlacklist(chatId, parts);
+            case "/blacklist_remove" -> removeFromBlacklist(chatId, parts);
         }
     }
 
@@ -141,14 +149,14 @@ public class TelegramChatService extends TelegramLongPollingBot {
                                 opp.getSymbol(),
                                 oi,
                                 opp.getArbitrageRate(),
-                                opp.getFirstExchange().getDisplayName() + firstDir,
-                                opp.getSecondExchange().getDisplayName() + secondDir
+                                ExchangeType.abbreviate(opp.getFirstExchange().getDisplayName()) + firstDir,
+                                ExchangeType.abbreviate(opp.getSecondExchange().getDisplayName()) + secondDir
                         ));
                     });
 
             result.append("```");
 
-            sendMessage(chatId, result.toString());
+            sendMessageAndScheduleDelete(chatId, result.toString(), 4);
 
         } catch (Exception e) {
             sendMessage(chatId, "❌ Error getting data");
@@ -184,7 +192,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         }
         PositionPnLData posData = exchangesService.pnlPositionCalculator(positionId);
 
-        sendMessage(chatId, validateCurrentPnl(posData));
+        sendMessageAndScheduleDelete(chatId, validateCurrentPnl(posData), 3);
     }
 
     private void getExchangesBalance(Long chatId) {
@@ -288,32 +296,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
     @Async
     public void handleFundingAlert(FundingAlertEvent event) {
         log.info("[Telegram] Received funding alert event for chat {}", event.getChatId());
-        sendMessage(event.getChatId(), formatAlert(event.getMessage()));
+        sendMessageAndScheduleDelete (event.getChatId(), formatAlert(event.getMessage()), 6);
     }
-
-//    @EventListener
-//    @Async
-//    public void handlePositionOpened(PositionOpenedEvent event) {
-//        log.info("[Telegram] Position opened event for {}", event.getTicker());
-//
-//        String message = formatPositionOpenedMessage(event);
-//
-//        for (Long chatId : fundingContext.getSubscriberIds()) {
-//            sendMessage(chatId, message);
-//        }
-//    }
-
-//    @EventListener
-//    @Async
-//    public void handlePositionClosed(PositionClosedEvent event) {
-//        log.info("[Telegram] Position closed event for {}", event.getTicker());
-//
-//        String message = formatPositionClosedMessage(event);
-//
-//        for (Long chatId : fundingContext.getSubscriberIds()) {
-//            sendMessage(chatId, message);
-//        }
-//    }
 
     @EventListener
     @Async
@@ -325,7 +309,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String message = formatPnLThresholdMessage(event);
 
         for (Long chatId : fundingContext.getSubscriberIds()) {
-            sendMessage(chatId, message);
+            sendMessageAndScheduleDelete(chatId, message, 5);
         }
     }
 
@@ -337,7 +321,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String message = formatNotificationEvent(event);
 
         for (Long chatId : fundingContext.getSubscriberIds()) {
-            sendMessage(chatId, message);
+            sendMessageAndScheduleDelete(chatId, message, 20);
         }
     }
 
@@ -366,7 +350,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
         for (Long chatId : fundingContext.getSubscriberIds()) {
             Integer msgId = sendMessageAndGetId(chatId, message);
 
-            if (Objects.nonNull(msgId)) {
+            if (msgId != null) {
                 positionMessageIds.put(event.getPositionId(), msgId);
             }
         }
@@ -383,16 +367,24 @@ public class TelegramChatService extends TelegramLongPollingBot {
             Integer msgId = positionMessageIds.get(event.getPositionId());
             editMessage(chatId, msgId, message);
 
-            if (Objects.nonNull(msgId)) {
+            if(!event.isSuccess()) {
+                scheduleDelete(chatId, msgId, 5);
+            }
+
+            if (msgId != null && event.isSuccess()) {
                 positionMessageIds.put(event.getPositionId(), msgId);
             }
+        }
+
+        if (!event.isSuccess()) {
+            positionMessageIds.remove(event.getPositionId());
         }
     }
 
     @EventListener
     @Async
     public void dynamicClosedPositionListener(PositionClosedEvent event) {
-        log.info("[Telegram] Position opened event for {}", event.getPositionId());
+        log.info("[Telegram] Position closed event for {}", event.getPositionId());
 
         String message = formatPositionClosedMessage(event);
 
@@ -400,10 +392,11 @@ public class TelegramChatService extends TelegramLongPollingBot {
             Integer msgId = positionMessageIds.get(event.getPositionId());
             editMessage(chatId, msgId, message);
 
-            if (Objects.nonNull(msgId)) {
+            if (msgId != null) {
                 positionMessageIds.put(event.getPositionId(), msgId);
             }
         }
+        positionMessageIds.remove(event.getPositionId());
     }
 
     @EventListener
@@ -515,9 +508,11 @@ public class TelegramChatService extends TelegramLongPollingBot {
         return String.format(
                 "🤖 *FundingBot:* Position `%s` Update \uD83D\uDCCC\n\n" +
                         "*Ticker:* %s\n" +
+                        "*Notification:* %s\n"+
                         "*Message:* %s\n",
                 event.getPositionId(),
                 event.getTicker(),
+                event.getHeader(),
                 event.getMessage()
         );
     }
@@ -542,8 +537,8 @@ public class TelegramChatService extends TelegramLongPollingBot {
         String grossSign = pnl.getGrossPnl() >= 0 ? "+" : "";
 
         return String.format(
-                "🤖 *[FundingBot]:* Position %s %s \uD83D\uDDFF\n\n" +
-                        "*Info:*\n" +
+                "🤖 *[FundingBot]:* Position `%s` \uD83D\uDDFF\n\n" +
+                        "\uD83D\uDCBC *Info:*\n" +
                         "Ticker: %s | Margin: %.2f$ \n" +
                         "Holdtime: %s | Rate: %.2f→%.2f\n\n" +
                         "\uD83D\uDCCA *Position:*\n" +
@@ -554,7 +549,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
                         "*Gross PnL:* %s%.2f\n" +
                         "*Funding:* %s%.2f\n" +
                         "*Net PnL:* %s%.2f USD (%s%.1f%%)",
-                pnl.getPositionId(), event.getMode(),
+                pnl.getPositionId(),
                 pnl.getTicker(), event.getBalance(),
                 formatDuration(hold), event.getOpenFundingRate(), event.getCurrentFundingRate(),
 
@@ -575,7 +570,7 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     private String formatPrice(double price) {
         if (price >= 1000) return String.format("%.1f", price);
-        if (price >= 1) return String.format("%.3f", price);
+        if (price >= 1) return String.format("%.2f", price);
         if (price >= 0.01) return String.format("%.4f", price);
         return String.format("%.6f", price);
     }
@@ -672,46 +667,6 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
         return sb.toString();
     }
-//
-//    private String formatPositionOpenedMessage(PositionOpenedEvent event) {
-//        if (!event.isSuccess()) {
-//            if (event.getResult() != null &&
-//                    event.getResult().contains("No balance available to open position")) {
-//                return "🤖 *FundingBot:* No margin available to open position";
-//            } else if (event.getResult() != null &&
-//                    event.getResult().contains("More than an hour until funding, position not opened")) {
-//                return "🤖 *FundingBot:* Funding payment in more than an hour, position wasn't opened";
-//            }
-//
-//            return String.format(
-//                    "🤖 *FundingBot:* Position Opening Failed ❌\n\n" +
-//                            "*ID:* `%s`\n" +
-//                            "*Mode:* %s\n" +
-//                            "*Ticker:* %s\n" +
-//                            "*Error:* %s\n",
-//                    event.getPositionId(),
-//                    event.getMode(),
-//                    event.getTicker(),
-//                    event.getResult()
-//            );
-//        }
-//
-//        return String.format(
-//                "🤖 *FundingBot:* Position Opened ✅\n\n" +
-//                        "*ID:* `%s`\n" +
-//                        "*Mode:* %s\n" +
-//                        "*Ticker:* %s\n" +
-//                        "*Margin Used:* %.2f USD\n" +
-//                        "*Open:* %s\n" +
-//                        "*Funding Rate:* %.2f%%\n",
-//                event.getPositionId(),
-//                event.getMode(),
-//                event.getTicker(),
-//                event.getBalanceUsed(),
-//                event.getOpenInfo(),
-//                event.getRate()
-//        );
-//    }
 
     private String formatAlert(ArbitrageRates rate) {
         return String.format("🚨 *High Arbitrage Alert* 🚨\n\n" +
@@ -950,9 +905,79 @@ public class TelegramChatService extends TelegramLongPollingBot {
 
     private String getExitSpreadInfo(double entrySpread, double exitSpread) {
         return String.format(
-                "S%.2f%% → %.2f%%",
+                "%.2f%% → %.2f%%",
                 entrySpread,
                 exitSpread
         );
+    }
+
+    public void sendMessageAndScheduleDelete(Long chatId, String text, long delayMinutes) {
+        sendTypingAction(chatId);
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(text);
+        message.setParseMode("Markdown");
+        try {
+            Integer messageId = execute(message).getMessageId();
+            deleteScheduler.schedule(() -> deleteMessage(chatId, messageId),
+                    delayMinutes, TimeUnit.MINUTES);
+        } catch (TelegramApiException e) {
+            log.error("Telegram Failed to send message to chat {}", chatId, e);
+        }
+    }
+
+    private void scheduleDelete(Long chatId, Integer messageId, long delayMinutes) {
+        deleteScheduler.schedule(
+                () -> deleteMessage(chatId, messageId),
+                delayMinutes,
+                TimeUnit.MINUTES
+        );
+    }
+
+    private void deleteMessage(Long chatId, Integer messageId) {
+        try {
+            DeleteMessage delete = new DeleteMessage();
+            delete.setChatId(chatId);
+            delete.setMessageId(messageId);
+            execute(delete);
+            log.info("Telegram Deleted message {} in chat {}", messageId, chatId);
+        } catch (TelegramApiException e) {
+            log.warn("Telegram Failed to delete message {}: {}", messageId, e.getMessage());
+        }
+    }
+
+    //Sub
+    private void addSubscriberId(Long chatId) {
+        fundingContext.addSubscriberId(chatId);
+        sendMessageAndScheduleDelete(chatId, "🤖 *FundingBot:* User `" + chatId + "` added", 3);
+    }
+
+    //Blacklist
+    private void addToBlacklist(Long chatId, String[] parts) {
+        if (parts.length < 2 || parts[1].trim().isEmpty()) {
+            showBlacklist(chatId);
+            return;
+        }
+        String ticker = parts[1].trim().toUpperCase();
+        fundingContext.addToBlacklist(ticker);
+        sendMessageAndScheduleDelete(chatId, "🤖 *FundingBot:* Added to blacklist: " + ticker, 3);
+    }
+
+    private void showBlacklist(Long chatId) {
+        Set<String> list = fundingContext.getTickerBlacklist();
+        String msg = list.isEmpty()
+                ? "🤖 *FundingBot:* Blacklist is empty"
+                : "🤖 *FundingBot:* Blacklisted tickers:\n" + String.join(", ", list);
+        sendMessageAndScheduleDelete(chatId, msg, 3);
+    }
+
+    private void removeFromBlacklist(Long chatId, String[] parts) {
+        if (parts.length < 2 || parts[1].trim().isEmpty()) {
+            sendMessage(chatId, "Usage: /blacklist_remove TICKER");
+            return;
+        }
+        String ticker = parts[1].trim().toUpperCase();
+        fundingContext.removeFromBlacklist(ticker);
+        sendMessageAndScheduleDelete(chatId, "🤖 *FundingBot:* Removed from blacklist: " + ticker, 3);
     }
 }

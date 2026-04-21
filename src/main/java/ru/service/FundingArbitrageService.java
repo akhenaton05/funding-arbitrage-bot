@@ -43,7 +43,8 @@ public class FundingArbitrageService {
     private static final Set<String> SUPPORTED_EXCHANGES = Set.of(
             "lighter",
             "extended",
-            "aster"
+            "aster",
+            "hyperliquid"
     );
 
     public FundingArbitrageService(CloseableHttpClient httpClient,
@@ -83,9 +84,7 @@ public class FundingArbitrageService {
                     break;
                 }
 
-                if (rate.getSymbol().equalsIgnoreCase("MSTR")
-                        || rate.getSymbol().equalsIgnoreCase("CRCL")
-                        || rate.getSymbol().equalsIgnoreCase("SIREN")) {
+                if (fundingContext.isBlacklisted(rate.getSymbol())) {
                     continue;
                 }
 
@@ -292,6 +291,7 @@ public class FundingArbitrageService {
             case "extended" -> ExchangeType.EXTENDED;
             case "aster" -> ExchangeType.ASTER;
             case "lighter" -> ExchangeType.LIGHTER;
+            case "hyperliquid" -> ExchangeType.HYPERLIQUID;
             default -> null;
         };
     }

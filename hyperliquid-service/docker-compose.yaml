@@ -1,0 +1,46 @@
+services:
+  hyper-service:
+    build: .
+    container_name: hyper-service
+    ports:
+      - "5002:5002"
+    env_file:
+      - .env
+    environment:
+      - HL_PRIVATE_KEY=${HL_PRIVATE_KEY}
+      - HL_WALLET_ADDRESS=${HL_WALLET_ADDRESS}
+
+      # Proxy
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - http_proxy=${HTTP_PROXY}
+      - https_proxy=${HTTPS_PROXY}
+
+      - PORT=5002
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+    volumes:
+      - ./app.py:/app/app.py:ro
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - hyper-network
+
+networks:
+  hyper-network:
+    driver: bridge

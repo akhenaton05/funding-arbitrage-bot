@@ -703,7 +703,6 @@ public class AsterClient {
     /**
      * Utils
      */
-
     public double getMarkPrice(String symbol) {
         try {
             URIBuilder builder = new URIBuilder(baseUrl + "/fapi/v1/ticker/price");

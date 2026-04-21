@@ -39,7 +39,8 @@ public class Asterdex implements Exchange {
     public int getOpenDelay(ExchangeType pairedWith) {
         return switch (pairedWith) {
             case EXTENDED -> 3000;  // Wait 3s for Extended to open
-            case LIGHTER -> 4000;   // Wait 3s for Lighter to open
+            case LIGHTER -> 4000;
+            case HYPERLIQUID -> 2000;
             default -> 0;
         };
     }
@@ -49,6 +50,7 @@ public class Asterdex implements Exchange {
         return switch (pairedWith) {
             case EXTENDED -> 3000;  // Wait 3s for Extended to close
             case LIGHTER -> 1000;   // Wait 1s for Lighter to close
+            case HYPERLIQUID -> 2000;
             default -> 0;
         };
     }
@@ -251,6 +253,7 @@ public class Asterdex implements Exchange {
     @Override
     public double calculateFunding(String ticker, Direction direction, FundingCloseSignal signal, Double prevFunding) {
         try {
+            Thread.sleep(15000);
             String symbol = formatSymbol(ticker);
 
             PremiumIndexResponse premium = asterClient.getPremiumIndexInfo(symbol);
@@ -290,7 +293,8 @@ public class Asterdex implements Exchange {
                     String.format("%.6f", realFunding),
                     String.format("%.6f", realFunding - (fundingPnl + prevFunding)));
 
-            return fundingPnl + prevFunding;
+//            return fundingPnl + prevFunding;
+            return realFunding;
 
         } catch (AsterApiException e) {
             log.error("[Aster] AsterApiError calculating funding: {}", e.getMessage());
@@ -335,20 +339,6 @@ public class Asterdex implements Exchange {
     @Override
     public boolean supportsSlTp() {
         return true;
-    }
-
-    @Override
-    public PositionRiskControl validatePositionRisk(String ticker, Direction direction) {
-        //Aster returns data from position request
-        List<Position> positions = getPositions(ticker, direction);
-        log.info("[Aster] PositionRisk position: {}", positions);
-        log.info("[Aster] Got liquidation price: {} and mark price: {}", positions.getFirst().getLiquidationPrice(), positions.getFirst().getMarkPrice());
-
-        return PositionRiskControl.builder()
-                .entryPrice(positions.getFirst().getEntryPrice())
-                .liquidationPrice(positions.getFirst().getLiquidationPrice())
-                .markPrice(positions.getFirst().getMarkPrice())
-                .build();
     }
 
     @Override

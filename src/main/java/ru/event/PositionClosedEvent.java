@@ -1,13 +1,10 @@
-package ru.dto.exchanges;
+package ru.event;
 
 import lombok.Builder;
 import lombok.Getter;
 import lombok.AllArgsConstructor;
 import lombok.NoArgsConstructor;
 import ru.dto.funding.PositionPnLData;
-import ru.dto.funding.PositionPriceSnapshot;
-
-import java.util.UUID;
 
 @Getter
 @Builder

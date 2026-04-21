@@ -24,5 +24,5 @@ public class FundingCloseSignal {
     private HoldingMode mode;
     private long openedAtMs;
     private double openSpread;
-    private int badStreak;
+    private int emptyPositionStreak;
 }

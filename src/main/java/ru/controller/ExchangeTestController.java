@@ -7,16 +7,19 @@ import org.springframework.web.bind.annotation.*;
 import ru.client.aster.AsterClient;
 import ru.client.extended.ExtendedClient;
 import ru.dto.exchanges.Direction;
+import ru.dto.exchanges.Position;
 import ru.dto.exchanges.aster.AsterTrade;
 import ru.dto.exchanges.extended.ExtendedMarketStats;
 import ru.dto.exchanges.extended.ExtendedPositionHistory;
 import ru.exchanges.Asterdex;
 import ru.exchanges.Extended;
+import ru.exchanges.Hyperliquid;
 import ru.exchanges.Lighter;
 
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -30,6 +33,7 @@ public class ExchangeTestController {
     private final Extended extended;
     private final Asterdex aster;
     private final Lighter lighter;
+    private final Hyperliquid hyper;
 
     // GET /test/aster/pnl?symbol=BTCUSDT&orderId=123456789
     @GetMapping("/aster/pnl")
@@ -104,6 +108,15 @@ public class ExchangeTestController {
         }
     }
 
+    @PostMapping("/hyper/leverage")
+    public ResponseEntity<?> testHyperSetLeverage(
+            @RequestParam("symbol") String symbol,
+            @RequestParam("leverage") int leverage) {
+
+        log.info("[Controller] Setting Hyper leverage: symbol={}, leverage={}", symbol, leverage);
+        return ResponseEntity.ok(hyper.setLeverage(symbol, leverage));
+    }
+
     //Positions Tests
     // GET /test/extended/position/?market=4-USD&side=LONG
     @GetMapping("/extended/position")
@@ -132,6 +145,31 @@ public class ExchangeTestController {
         return ResponseEntity.ok("OK");
     }
 
+    @GetMapping("/hyper/position")
+    public ResponseEntity<?> getHyperPosition(@RequestParam(value = "market") String market,
+                                                @RequestParam(value = "side") Direction side) {
+        List<Position> pos = hyper.getPositions(market, side);
+        log.info("[Controller] Hyper position response: {}", pos);
 
+        return ResponseEntity.ok(pos);
+    }
 
+    @PostMapping("/hyper/open")
+    public ResponseEntity<?> testHyperOpen(
+            @RequestParam("symbol") String symbol,
+            @RequestParam("size") Double size,
+            @RequestParam("direction") Direction direction) {
+
+        log.info("[Controller] Opening Hyper pos: symbol={}, size={}, direction={}", symbol, size, direction);
+        return ResponseEntity.ok(hyper.openPositionWithSize(symbol, size, String.valueOf(direction)));
+    }
+
+    @PostMapping("/hyper/close")
+    public ResponseEntity<?> testHyperClose(
+            @RequestParam("symbol") String symbol,
+            @RequestParam("direction") Direction direction) {
+
+        log.info("[Controller]Closing Hyper pos: symbol={}, direction={}", symbol, direction);
+        return ResponseEntity.ok(hyper.closePosition(symbol, direction));
+    }
 }

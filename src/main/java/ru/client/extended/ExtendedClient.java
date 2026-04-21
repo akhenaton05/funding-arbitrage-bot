@@ -42,7 +42,6 @@ public class ExtendedClient {
     /**
      * Leverage
      */
-
     public String setLeverage(String market, int leverage) {
         String endpoint = baseUrl + "/user/leverage";
 

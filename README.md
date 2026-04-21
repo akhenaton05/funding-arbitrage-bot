@@ -25,21 +25,21 @@ Aster integrated directly into the Java bot via signed HTTP clients. Hyperliquid
 
 ## Architecture
 ```
-┌──────────────────────────────────┐
-│    Java Bot  (Spring Boot)       │  ← core logic, scheduler, Telegram
-│          systemd                 │
-└───────────┬──────────────────────┘
-            │ HTTP
-      ┌─────┴───────────────────┐
-      │                         │
-      ▼                         ▼
-Extended Service           Lighter Service
-Python / Flask             Python / Quart
-Docker · :5000             Docker · :5001
-StarkNet Ed25519           zkLighter SDK
-      │                         │
-      ▼                         ▼
-Extended Exchange          Lighter
+            ┌──────────────────────────────────┐
+            │    Java Bot  (Spring Boot)       │  ← core logic, scheduler, Telegram
+            │          systemd                 │
+            └──────────────────┬───────────────┘
+                               │ HTTP
+      ┌────────────────────────┌──────────────────────────┐
+      │                        │                          │       
+      ▼                        ▼                          ▼
+Hyperliquid Service      Extended Service           Lighter Service
+Python / Flask           Python / Flask             Python / Quart
+Docker :5002             Docker :5000               Docker :5001
+Ed25519                  StarkNet Ed25519           zkLighter SDK
+   │                           │                         │
+   ▼                           ▼                         ▼
+Hyperliquid                 Extended                      Lighter
 ```
 
 The Java bot holds all core logic: signal detection, position state, PnL tracking, risk management, and scheduling. The Python services act as thin proxies — they handle SDK initialization, chain signing, and expose a simple REST API for the bot to call.

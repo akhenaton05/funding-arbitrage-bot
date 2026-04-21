@@ -19,11 +19,12 @@ An automated delta-neutral arbitrage bot that exploits funding rate discrepancie
 | **Hyperliquid** | CEX-style perps | Ed25519 | Python/Flask · port `5002` |
 
 
-Aster and Hyperliquid are integrated directly into the Java bot via signed HTTP clients. Extended and Lighter each require a dedicated Python microservice because their SDKs depend on chain-specific cryptographic primitives that are impractical to replicate in Java.
+Aster integrated directly into the Java bot via signed HTTP clients. Hyperliquid, Extended and Lighter each require a dedicated Python microservice because their SDKs depend on chain-specific cryptographic primitives that are impractical to replicate in Java.
 
 ---
 
 ## Architecture
+```
 ┌──────────────────────────────────┐
 │    Java Bot  (Spring Boot)       │  ← core logic, scheduler, Telegram
 │          systemd                 │
@@ -39,7 +40,7 @@ StarkNet Ed25519           zkLighter SDK
       │                         │
       ▼                         ▼
 Extended Exchange          Lighter
-
+```
 
 The Java bot holds all core logic: signal detection, position state, PnL tracking, risk management, and scheduling. The Python services act as thin proxies — they handle SDK initialization, chain signing, and expose a simple REST API for the bot to call.
 
@@ -72,7 +73,7 @@ Position size is delta-neutral: the bot queries the live order book of both exch
 
 Pre-open validations:
 - Both exchanges must have funding payment within 60 minutes
-- Available margin must exceed $10
+- Available margin must exceed N amount(10$ by default)
 - Max leverage capped at the minimum supported by both exchanges
 - Duplicate position guard — same ticker + exchange pair cannot be opened twice
 
@@ -85,6 +86,7 @@ After a 5-second settle window the bot calls `getPositions()` on both exchanges.
 If validation fails — one leg opened and the other did not — the bot immediately closes the successful leg to eliminate one-sided market exposure:
 
 Exchange A opened ✅ | Exchange B failed ❌ → close Exchange A immediately
+
 Exchange A failed ❌ | Exchange B opened ✅ → close Exchange B immediately
 
 
@@ -124,44 +126,6 @@ Funding prediction runs at :59 (1 minute before payment) and accumulates per-exc
 - **SL/TP orders**: supported on Aster via `STOP_MARKET` / `TAKE_PROFIT_MARKET` orders, placed immediately after open if enabled
 - **Funding rate flip detection**: Smart Mode positions are monitored for direction reversal; Telegram notification is sent if the spread flips
 - **Closure verification**: after every close, both positions are confirmed empty; if not, a retry close is attempted automatically
-
----
-
-## Extended Service (Python · port 5000)
-
-Handles all communication with the Extended (StarkNet) exchange.
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/order/market` | Open market order (async, returns `external_id`) |
-| `POST` | `/positions/close` | Close position |
-| `GET` | `/order/status/<id>` | Poll order fill status |
-| `GET` | `/positions` | Open positions |
-| `GET` | `/balance` | Account balance |
-| `PATCH` | `/user/leverage` | Set leverage |
-| `GET` | `/funding/history` | Accumulated funding payments |
-| `GET` | `/api/v1/info/markets/<m>/orderbook` | Order book |
-
-Orders are placed asynchronously: the endpoint returns `202 Accepted` with an `external_id`, and the bot polls `/order/status` to confirm execution. Market data is cached with a configurable TTL (default 30 seconds).
-
----
-
-## Lighter Service (Python · port 5001)
-
-Handles all communication with the Lighter (zkEVM) exchange.
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/order/market` | Open market order (IOC) |
-| `POST` | `/positions/close` | Close position (reduce-only IOC) |
-| `GET` | `/positions` | Open positions |
-| `GET` | `/balance` | Account balance |
-| `POST` | `/user/leverage` | Set leverage (on-chain tx) |
-| `GET` | `/market/<m>/orderbook` | Order book |
-| `GET` | `/market/<m>/funding-rate` | Current funding rate |
-| `GET` | `/funding/payments` | Accumulated funding payments |
-
-Markets are loaded dynamically at startup. Leverage is inferred from open positions via `initial_margin_fraction` and cached.
 
 ---
 

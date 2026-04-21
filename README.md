@@ -5,59 +5,59 @@
 [![Docker](https://img.shields.io/badge/Docker-Production-blue.svg)](https://www.docker.com/)
 [![Telegram](https://img.shields.io/badge/Telegram-Notifications-purple.svg)](https://core.telegram.org/bots/api)
 
-An automated delta-neutral arbitrage bot that exploits funding rate discrepancies across decentralized perpetual exchanges(DEX). When a significant spread is detected, the bot simultaneously opens opposing positions on two exchanges — collecting the funding payment while remaining market-neutral.
+An automated delta-neutral arbitrage bot that exploits funding rate discrepancies across decentralized perpetual exchanges. When a significant spread is detected, the bot simultaneously opens opposing positions on two exchanges — collecting the funding payment while remaining market-neutral.
 
 ---
 
 ## Supported Exchanges
 
-| Exchange | Type | Auth | Microservice |
+| Exchange | Type | Auth | Integration |
 |----------|------|------|-------------|
 | **Aster** | CEX-style perps | HmacSHA256 | Java (native) |
+| **Hyperliquid** | CEX-style perps | Ed25519 | Java (native) |
 | **Extended** | StarkNet perps | Ed25519 (StarkNet) | Python/Flask · port `5000` |
 | **Lighter** | zkEVM perps | zk-signed transactions | Python/Quart · port `5001` |
 
-Aster is integrated directly into the Java bot via a signed HTTP client. Extended and Lighter each require a dedicated Python microservice because their SDKs depend on chain-specific cryptographic primitives that are impractical to replicate in Java.
+Aster and Hyperliquid are integrated directly into the Java bot via signed HTTP clients. Extended and Lighter each require a dedicated Python microservice because their SDKs depend on chain-specific cryptographic primitives that are impractical to replicate in Java.
 
 ---
 
 ## Architecture
+┌──────────────────────────────────┐
+│    Java Bot  (Spring Boot)       │  ← core logic, scheduler, Telegram
+│          systemd                 │
+└───────────┬──────────────────────┘
+            │ HTTP
+      ┌─────┴───────────────────┐
+      │                         │
+      ▼                         ▼
+Extended Service           Lighter Service
+Python / Flask             Python / Quart
+Docker · :5000             Docker · :5001
+StarkNet Ed25519           zkLighter SDK
+      │                         │
+      ▼                         ▼
+Extended Exchange          Lighter
 
-```
-┌─────────────────────────────┐
-│   Java Bot  (Spring Boot)   │  ← core logic, scheduler, Telegram
-│         systemd             │
-└──────────┬──────────────────┘
-           │ HTTP
-     ┌─────┴──────────────────┐
-     │                        │
-     ▼                        ▼
-Extended Service         Lighter Service
-Python / Flask           Python / Quart
-Docker · :5000           Docker · :5001
-StarkNet Ed25519         zkLighter SDK
-     │                        │
-     ▼                        ▼
-Extended Exchange        Lighter Exchange
-```
 
-The Java holds all core logic: business logic, position state, PnL tracking, and scheduling. The Python services act as thin proxies — they handle SDK initialization, chain signing, and expose a simple REST API for the bot to call.
+The Java bot holds all core logic: signal detection, position state, PnL tracking, risk management, and scheduling. The Python services act as thin proxies — they handle SDK initialization, chain signing, and expose a simple REST API for the bot to call.
 
 ---
 
 ## How It Works
 
-### 1. Signal Detection (every hour at 54min(your time to open))
+### 1. Signal Detection (every hour at :54)
 
-The bot fetches funding rates from an aggregator API and calculates the spread between each supported exchange pair. Two trading modes are available:
+The bot fetches funding rates from an aggregator API and calculates the spread for every pair of supported exchanges. Rates are cached for 60 seconds to reduce API load. Two trading modes are available:
 
-Two modes available:
-- **Fast Mode** — spread ≥ configured threshold (default 150 bps). Open before funding, close immediately after payment received (at :01).
-- **Smart Mode** — spread ≥ lower threshold (default 50 bps). Hold the position until the spread compresses below a close threshold or a bad-streak counter is hit.
+- **Fast Mode** — spread ≥ configured threshold (default 150 bps). Opens before funding, closes automatically at :01 after the payment is received.
+- **Smart Mode** — spread ≥ lower threshold (default 50 bps). Holds the position until the spread compresses below a close threshold, or a funding rate flip is detected.
 
-OI rank filtering is also available: positions are only opened for assets with an open-interest rank below a configurable maximum, to minimise slippage on low OI tokens
+Optional filters:
+- **OI rank filter** — skip assets with an open-interest rank above a configurable maximum to avoid slippage on low-liquidity tokens.
+- **Ticker blacklist** — a dynamic per-ticker blocklist configurable via Telegram or `application.yml`, persisted across restarts via config.
 
-### 2. Synchronous Opening (parallel, < 3 seconds)
+### 2. Delta-Neutral Opening (parallel, < 3 seconds)
 
 Both legs are opened simultaneously using `CompletableFuture`:
 
@@ -67,116 +67,126 @@ CompletableFuture<String> secondFuture = CompletableFuture.supplyAsync(() -> exc
 CompletableFuture.allOf(firstFuture, secondFuture).get(20, TimeUnit.SECONDS);
 ```
 
-Position size is delta-neutral: the bot queries the order book of both exchanges, computes the maximum fillable size for the available margin on each side, and uses the minimum of the two.
+Position size is delta-neutral: the bot queries the live order book of both exchanges, calculates the maximum fillable size for the available margin on each side, and uses the minimum of the two — rounded to 2 decimal places.
 
-### 3. Validation
+Pre-open validations:
+- Both exchanges must have funding payment within 60 minutes
+- Available margin must exceed $10
+- Max leverage capped at the minimum supported by both exchanges
+- Duplicate position guard — same ticker + exchange pair cannot be opened twice
 
-After a 4-second settle window the bot calls `getPositions()` on both exchanges. Both legs must be present with a non-zero size.
+### 3. Post-Open Validation
 
-### 4. Rollback (Emergency Close)
+After a 5-second settle window the bot calls `getPositions()` on both exchanges. Both legs must be present with a non-zero size. Delta-neutrality is verified and logged with size delta % and notional difference %.
 
-If validation fails — meaning one leg opened and the other did not — the bot immediately closes the successful leg to eliminate one-sided market exposure:
+### 4. Rollback on Partial Failure
 
-```
-Extended opened ✅  |  Lighter failed ❌  →  close Extended
-Lighter opened  ✅  |  Extended failed ❌  →  close Lighter
-```
+If validation fails — one leg opened and the other did not — the bot immediately closes the successful leg to eliminate one-sided market exposure:
+
+Exchange A opened ✅ | Exchange B failed ❌ → close Exchange A immediately
+Exchange A failed ❌ | Exchange B opened ✅ → close Exchange B immediately
+
 
 The position ID is rolled back and an error notification is sent via Telegram.
 
 ### 5. Closing
 
-- **Fast Mode**: closed automatically at :01 UTC after the funding payment window.
-- **Smart Mode**: closed when the spread drops below `closeThreshold` or after `badStreakThreshold` consecutive bad ticks.
-- **Manual close**: `/close P-0001` via Telegram, or `/closeall` for all open positions.
-- **P&L threshold**: optionally auto-close when net return exceeds a configured percentage.
-- **Liquidation guard**: a background job checks all open positions every 10 minutes and closes the hedge if one leg has been liquidated or closed externally.
+- **Fast Mode**: auto-closed at :01 UTC after funding payment.
+- **Smart Mode**: closed when funding rate flips direction (bot detects the spread has reversed).
+- **Manual close**: `/close P-0001` via Telegram, or `/closeall`.
+- **P&L threshold**: auto-close when net return exceeds a configured percentage (with a 10-minute grace period after open).
+- **Liquidation guard**: background job every 10 minutes checks all positions; if one leg is liquidated or closed externally, the hedge is closed immediately after 3 consecutive empty-position confirmations.
 
 ---
 
-## Key Features
+## PnL Tracking
 
-- **50+ trading pairs** monitored in a single scan
-- **Delta-neutral sizing** — matching position sizes via live order-book data from both exchanges
-- **Parallel open/close** — both legs executed concurrently, average time < 3 seconds
-- **Automatic rollback** on partial failures
-- **Bi-directional position validation** after every open
-- **Funding PnL tracking** — funding payments accumulated per leg, included in net PnL
-- **Unrealized PnL** — calculated against live bid/ask, not mark price, for realistic estimates
-- **Stop Loss / Take Profit** — supported on Aster (STOP_MARKET / TAKE_PROFIT_MARKET orders)
-- **OI rank filter** — skip low-liquidity assets
-- **Telegram bot** — real-time alerts, position status, manual controls
+Unrealized PnL is calculated against live order book bid/ask prices, not mark price, for realistic exit estimates:
+- **LONG leg** closing → uses best **bid** price
+- **SHORT leg** closing → uses best **ask** price
+- Fallback to mark price ± 0.4% slippage if order book is unavailable
+
+Each position tracks:
+- Gross PnL (price movement only)
+- Funding payments accumulated per leg
+- Open and close fees
+- Net PnL = Gross + Funding − Fees
+- Exit readiness signal: `CLOSE NOW / CAN CLOSE / SLIP RISK / RATE DROP / HOLD / NEUTRAL`
+
+Funding prediction runs at :59 (1 minute before payment) and accumulates per-exchange funding via each exchange's native funding history API.
+
+---
+
+## Risk Management
+
+- **Liquidation price proximity alerts**: warning at configurable % distance, critical alert closer to liquidation — checked every 10 minutes
+- **SL/TP orders**: supported on Aster via `STOP_MARKET` / `TAKE_PROFIT_MARKET` orders, placed immediately after open if enabled
+- **Funding rate flip detection**: Smart Mode positions are monitored for direction reversal; Telegram notification is sent if the spread flips
+- **Closure verification**: after every close, both positions are confirmed empty; if not, a retry close is attempted automatically
 
 ---
 
 ## Extended Service (Python · port 5000)
 
-Handles all communication with the Extended (StarkNet) exchange. The `x10-python-trading-starknet` SDK requires Ed25519 signatures generated using StarkNet primitives — impractical to port to Java.
-
-**Endpoints used by the bot:**
+Handles all communication with the Extended (StarkNet) exchange.
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | `POST` | `/order/market` | Open market order (async, returns `external_id`) |
-| `POST` | `/positions/close` | Close position (async) |
-| `GET` | `/order/status/<id>` | Poll order status |
-| `GET` | `/positions` | Get open positions |
+| `POST` | `/positions/close` | Close position |
+| `GET` | `/order/status/<id>` | Poll order fill status |
+| `GET` | `/positions` | Open positions |
 | `GET` | `/balance` | Account balance |
 | `PATCH` | `/user/leverage` | Set leverage |
-| `GET` | `/funding/history` | Funding payment history |
+| `GET` | `/funding/history` | Accumulated funding payments |
 | `GET` | `/api/v1/info/markets/<m>/orderbook` | Order book |
 
-Orders are placed asynchronously: the endpoint returns `202 Accepted` with an `external_id`, and the bot polls `/order/status` to confirm execution. Market data (prices, precision) is cached with a configurable TTL (default 30 seconds).
+Orders are placed asynchronously: the endpoint returns `202 Accepted` with an `external_id`, and the bot polls `/order/status` to confirm execution. Market data is cached with a configurable TTL (default 30 seconds).
 
 ---
 
 ## Lighter Service (Python · port 5001)
 
-Handles all communication with the Lighter (zkEVM) exchange. Uses `lighter-sdk` for zk-signed transaction construction.
-
-**Endpoints used by the bot:**
+Handles all communication with the Lighter (zkEVM) exchange.
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | `POST` | `/order/market` | Open market order (IOC) |
 | `POST` | `/positions/close` | Close position (reduce-only IOC) |
-| `GET` | `/positions` | Get open positions |
+| `GET` | `/positions` | Open positions |
 | `GET` | `/balance` | Account balance |
 | `POST` | `/user/leverage` | Set leverage (on-chain tx) |
 | `GET` | `/market/<m>/orderbook` | Order book |
 | `GET` | `/market/<m>/funding-rate` | Current funding rate |
 | `GET` | `/funding/payments` | Accumulated funding payments |
 
-Markets are loaded dynamically at startup from the Lighter order books API. Leverage is cached — on startup the service reads open positions and infers the current leverage from `initial_margin_fraction`.
+Markets are loaded dynamically at startup. Leverage is inferred from open positions via `initial_margin_fraction` and cached.
 
 ---
 
-## Deployment
+### Key Config (`application.yml`)
 
-```
-Ubuntu Server
-├── systemd
-│   └── Java Bot (port 8080)
-├── Docker
-│   ├── extended-service (port 5000)  ← restart: unless-stopped
-│   └── lighter-service  (port 5001)  ← restart: unless-stopped
-└── Telegram Bot
-```
-
-The Java bot is managed by systemd with `Restart=on-failure`. Both Python services run in Docker with `restart: unless-stopped`. A proxy can be configured for all three services independently.
-
-### Configuration
-
-Create `src/main/resources/application.yaml` (see `application.yaml.example`) and `.env` files in each service directory before starting.
-
-```bash
-# Start Python services
-cd extended-service && docker compose up -d
-cd lighter-service  && docker compose up -d
-
-# Build and start Java bot
-mvn clean package -DskipTests
-java -jar target/CryptoTgBot-1.0-SNAPSHOT.jar
+```yaml
+funding:
+  thresholds:
+    smart-mode-rate: 50    # bps, minimum spread for Smart Mode
+    fast-mode-rate: 150    # bps, minimum spread for Fast Mode
+  oi:
+    enabled: true
+    max-rank: 50           # skip tokens with OI rank > 50
+  ticker-blacklist:
+    - MSTR
+    - CRCL
+  sltp:
+    enabled: true
+    stop-loss-percent: 5.0
+    take-profit-percent: 10.0
+  pnl:
+    enable-notifications: true
+    threshold-percent: 2.0
+  liquidation:
+    warn: 60               # % progress toward liquidation price
+    critical: 85
 ```
 
 ---
@@ -187,13 +197,19 @@ java -jar target/CryptoTgBot-1.0-SNAPSHOT.jar
 |---------|-------------|
 | `/track` | Subscribe to alerts |
 | `/untrack` | Unsubscribe |
-| `/rates` | Show top 10 current arbitrage spreads |
-| `/trades` | Show position history and PnL |
-| `/close P-XXXX` | Manually close a position by ID |
+| `/rates` | Top 10 current arbitrage spreads |
+| `/trades` | Position history and PnL summary |
+| `/history` | Detailed trade statistics (day / week / month / all) |
+| `/balance` | Current balance on all exchanges |
+| `/pnl P-XXXX` | Live PnL for an open position |
+| `/close P-XXXX` | Manually close a position |
 | `/closeall` | Close all open positions |
-| `/pospnl P-XXXX` | Show current PnL for a position |
+| `/blacklist` | Show current ticker blacklist |
+| `/blacklist_add TICKER` | Add ticker to blacklist |
+| `/blacklist_remove TICKER` | Remove ticker from blacklist |
 
 ---
 
 ## ⚠️ Disclaimer
-Trading perpetual futures involves significant financial risk, including the possibility of total loss of capital. This software is provided for educational and research purposes. Always test on paper accounts before deploying real funds. The author accepts no responsibility for financial losses.
+
+Trading perpetual futures involves significant financial risk, including the possibility of total loss of capital. This software is provided for educational and research purposes only. Always test with minimal funds before deploying. The author accepts no responsibility for financial losses.

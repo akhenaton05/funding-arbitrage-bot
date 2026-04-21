@@ -14,9 +14,10 @@ An automated delta-neutral arbitrage bot that exploits funding rate discrepancie
 | Exchange | Type | Auth | Integration |
 |----------|------|------|-------------|
 | **Aster** | CEX-style perps | HmacSHA256 | Java (native) |
-| **Hyperliquid** | CEX-style perps | Ed25519 | Java (native) |
 | **Extended** | StarkNet perps | Ed25519 (StarkNet) | Python/Flask · port `5000` |
 | **Lighter** | zkEVM perps | zk-signed transactions | Python/Quart · port `5001` |
+| **Hyperliquid** | CEX-style perps | Ed25519 | Python/Flask · port `5002` |
+
 
 Aster and Hyperliquid are integrated directly into the Java bot via signed HTTP clients. Extended and Lighter each require a dedicated Python microservice because their SDKs depend on chain-specific cryptographic primitives that are impractical to replicate in Java.
 
